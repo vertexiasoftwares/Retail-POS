@@ -5,10 +5,11 @@ import { performance } from 'node:perf_hooks'
 import type { LicenseClaims, LicenseStatus, LicenseTrust, SignedLicense, LicenseInventory } from '../../src/types/licensing.js'
 import { CLOCK_TOLERANCE, publicKeyId, signDeviceRequest, validateTrust, verifyLease } from './protocol.mjs'
 import { requiresTransactionLicense } from './policy.mjs'
+import type { CloudLicenseClient } from './cloudClient.mjs'
 
 export type LicenseProtector = { encrypt(value: string): Buffer; decrypt(value: Buffer): string }
 type DeviceState = { version: 1; privateKey: string; publicKey: string; lease: SignedLicense | null; maxSequence: number; maxSeen: number; clockBlocked: boolean }
-type Options = { path: string; trust: LicenseTrust | null; binding: () => string; inventory?: () => LicenseInventory; currentBranch?: () => string | undefined; protector: LicenseProtector; allowLocal?: boolean; clock?: () => number; monotonic?: () => number; transport?: typeof fetch }
+type Options = { path: string; trust: LicenseTrust | null; binding: () => string; inventory?: () => LicenseInventory; currentBranch?: () => string | undefined; protector: LicenseProtector; allowLocal?: boolean; clock?: () => number; monotonic?: () => number; transport?: typeof fetch; cloudClient?: CloudLicenseClient }
 
 export class LicenseClient {
   private state: DeviceState | null = null
@@ -51,10 +52,46 @@ export class LicenseClient {
   status(branchId = this.options.currentBranch?.()): LicenseStatus {
     let installationId = ''
     try { installationId = this.options.binding() } catch { /* Restore can temporarily close the database. */ }
+    
+    // Check cloud license status first
+    if (this.options.cloudClient) {
+      const cloud = this.options.cloudClient.inspect()
+      if (cloud.accessAllowed) {
+        return {
+          state: 'active',
+          canTransact: true,
+          message: cloud.message || 'Vertexia Retail POS license active.',
+          deviceId: cloud.deviceId,
+          installationId: this.options.cloudClient.installationId || installationId,
+          tenantId: cloud.businessId || null,
+          licenseId: cloud.license_id || null,
+          customerName: cloud.registration?.businessName || this.options.inventory?.().businessName || 'Vertexia Retail POS',
+          expiresAt: cloud.expires_at || null,
+          refreshAfter: null,
+          offlineUntil: cloud.offline_until || null,
+          lastCheckedAt: cloud.last_verified_at || null,
+          lastError: '',
+          busy: false,
+        }
+      }
+    }
+
     const result: LicenseStatus = { state: 'invalid', canTransact: false, message: this.failure || 'License is invalid. Contact the company.', deviceId: this.state ? publicKeyId(this.state.publicKey) : '', installationId,
       tenantId: null, licenseId: null, customerName: null, expiresAt: null, refreshAfter: null, offlineUntil: null, lastCheckedAt: null, lastError: this.lastError, busy: this.busy }
     if (this.failure || !this.state) return result
-    if (!this.trust) return { ...result, state: 'unconfigured', message: 'Company licensing service is not configured. Contact the company to provision this installation.' }
+    if (!this.trust) {
+      if (this.options.cloudClient) {
+        const cloud = this.options.cloudClient.inspect()
+        return {
+          ...result,
+          state: cloud.status === 'EXPIRED' ? 'expired' : 'unactivated',
+          message: cloud.message || 'Activate this Retail POS with your license key.',
+          deviceId: cloud.deviceId,
+          customerName: cloud.registration?.businessName || null,
+        }
+      }
+      return { ...result, state: 'unconfigured', message: 'Company licensing service is not configured. Contact the company to provision this installation.' }
+    }
     if (!this.state.lease) return { ...result, state: 'unactivated', message: 'Activate this installation with the key supplied by the company. Records and backups remain accessible.' }
     try {
       const c = verifyLease(this.state.lease, this.trust.issuerPublicKey)
@@ -83,11 +120,27 @@ export class LicenseClient {
     const status = this.status(branchId)
     if (!status.canTransact) throw new Error('POS license locked: ' + status.message)
   }
-  activate(key: unknown, reauthorize = () => {}) {
-    if (typeof key !== 'string' || !/^VTX-[A-F0-9]{48}$/.test(key.trim().toUpperCase())) return Promise.reject(new Error('Enter the activation key supplied by the company.'))
-    return this.exchange('activate', key.trim().toUpperCase(), reauthorize)
+  async activate(key: unknown, reauthorize = () => {}) {
+    if (typeof key !== 'string') return Promise.reject(new Error('Enter the activation key supplied by the company.'))
+    const normalized = key.trim().toUpperCase()
+    if (/^MK-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalized) && this.options.cloudClient) {
+      const res = await this.options.cloudClient.activate(normalized)
+      reauthorize()
+      return { message: res.message || 'Retail POS license activated successfully.' }
+    }
+    if (!/^VTX-[A-F0-9]{48}$/.test(normalized)) return Promise.reject(new Error('Enter a valid license key (e.g. MK-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX).'))
+    return this.exchange('activate', normalized, reauthorize)
   }
-  refresh(reauthorize = () => {}) { return this.exchange('refresh', undefined, reauthorize) }
+  async refresh(reauthorize = () => {}) {
+    if (this.options.cloudClient) {
+      try {
+        const res = await this.options.cloudClient.refresh()
+        reauthorize()
+        if (res.accessAllowed) return { message: 'Cloud license refreshed and verified.' }
+      } catch {}
+    }
+    return this.exchange('refresh', undefined, reauthorize)
+  }
   private async exchange(action: 'activate' | 'refresh', activationKey: string | undefined, reauthorize: () => void) {
     if (this.busy) throw new Error('A license check is already in progress.')
     if (this.failure || !this.state || !this.trust) throw new Error(this.status().message)

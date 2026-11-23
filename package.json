@@ -44,12 +44,18 @@
     "company:verify": "node scripts/verify-agency-deployment.mjs",
     "test:deployment": "npm run build:electron && node --test tests/deployment.database.test.mjs",
     "test:agency:local": "npm run build:electron && node --test tests/local-agency.database.test.mjs",
-    "test:desktop:agency:local": "npm run build:electron && node scripts/smoke-agency.mjs --local-setup"
+    "test:desktop:agency:local": "npm run build:electron && node scripts/smoke-agency.mjs --local-setup",
+    "build:server": "tsc -p server/tsconfig.json",
+    "start:server": "npm run build:server && node server-dist/server/index.mjs",
+    "test:server": "npm run build:server && node --test tests/server.test.mjs"
   },
   "dependencies": {
+    "@fastify/static": "^10.1.12",
     "@tailwindcss/vite": "^4.3.3",
+    "fastify": "^5.12.8",
     "framer-motion": "^14.0.0",
     "jsbarcode": "^3.12.3",
+    "pngjs": "^7.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4.3.3"

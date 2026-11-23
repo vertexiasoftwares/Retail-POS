@@ -5,7 +5,9 @@
   --amber:#e58b0b;
   --rose:#df4265;
   --purple:#8344ed;
-  min-height:100vh
+  min-height:100vh;
+  height:100%;
+  flex:1;
 }
 .sidebar{
   position:fixed;

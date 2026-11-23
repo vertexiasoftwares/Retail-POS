@@ -31,7 +31,9 @@ export class RetailRepository {
   }
 
   private shift(branchId: string): string {
-    const row = this.db.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1").get(branchId)
+    const actorId = this.actorId()
+    const row = this.db.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1").get(branchId, actorId)
+      ?? this.db.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1").get(branchId)
     if (!row) throw new Error('Open a cash shift before paying a supplier in cash.')
     return String(row.id)
   }

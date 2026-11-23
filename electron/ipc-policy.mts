@@ -21,7 +21,10 @@ const permissions: Record<string, Permission> = {
 }
 const requestBranches = new Set(['branches:create', 'branches:update', 'branches:set-active', 'transfers:list', 'transfers:dispatch', 'transfers:receive', 'transfers:cancel', 'reports:snapshot', 'reports:export-csv', 'customers:list', 'customers:create', 'customers:update', 'customers:collect', 'expenses:list', 'expenses:post', 'expenses:reverse', 'cash:close-shift', 'cash:move', 'retail:adjust-stock', 'retail:receive-purchase', 'retail:pay-supplier', 'dashboard:get-snapshot', 'pos:complete-sale', 'products:list', 'sales:get-snapshot', 'sales:create-return', 'sales:export-csv'])
 const idBranches = new Set(['transfers:detail', 'reports:valuation', 'customers:detail', 'customers:receipt', 'cash:get-snapshot', 'retail:get-snapshot', 'pos:get-bootstrap', 'pos:hold-sale', 'pos:open-shift', 'pos:create-product', 'products:save', 'products:toggle-status', 'products:import-csv', 'products:export-csv', 'sales:get-detail', 'auth:select-branch'])
-const publicChannels = new Set(['auth:status', 'auth:setup', 'auth:login', 'auth:logout'])
+const publicChannels = new Set([
+  'auth:status', 'auth:setup', 'auth:login', 'auth:logout',
+  'cloudLicense:status', 'cloudLicense:register', 'cloudLicense:activate', 'cloudLicense:refresh'
+])
 // Licensing follows the actual posting scope as well as the current branch. Renderer arguments
 // cannot select an unlocked branch to post into a locked destination or resume its held cart.
 export function licenseBranches(database: VertexiaDatabase, channel: string, args: unknown[], current?: string) {
@@ -55,18 +58,24 @@ export function authorizeIpc(auth: AuthRepository, database: VertexiaDatabase, c
   if (channel === 'transfers:dispatch') auth.require('transfers.dispatch',(args[0] as {destinationBranchId?:unknown}).destinationBranchId ?? '')
   if (channel === 'customers:create' && (args[0] as { openingBalancePaisa?: unknown }).openingBalancePaisa !== 0) auth.require('customers.manage', branchId)
   if (channel === 'customers:collect' && (args[0] as { method?: unknown }).method === 'Cash' && !session.permissions.includes('cash.manage')) {
-    const shift = database.connection.prepare("SELECT cashier_id FROM cash_shifts WHERE branch_id=? AND status='open'").get(branchId as string)
-    if (shift && shift.cashier_id !== session.userId) throw new Error('You can only receive cash into your own open shift.')
+    const ownShift = database.connection.prepare("SELECT 1 FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open'").get(branchId as string, session.userId)
+    if (!ownShift) {
+      const shift = database.connection.prepare("SELECT cashier_id FROM cash_shifts WHERE branch_id=? AND status='open'").get(branchId as string) as { cashier_id: string } | undefined
+      if (shift && shift.cashier_id !== session.userId) throw new Error('You can only receive cash into your own open shift.')
+    }
   }
   if (channel === 'cash:close-shift' && !session.permissions.includes('cash.manage')) {
     const request = args[0] as { shiftId?: unknown }
     if (typeof request.shiftId !== 'string') throw new Error('Invalid cash shift.')
-    const shift = database.connection.prepare('SELECT cashier_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, branchId as string)
+    const shift = database.connection.prepare('SELECT cashier_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, branchId as string) as { cashier_id: string } | undefined
     if (!shift || shift.cashier_id !== session.userId) throw new Error('You can only close your own cash shift.')
   }
   if (channel === 'pos:complete-sale' && !session.permissions.includes('cash.manage')) {
-    const shift = database.connection.prepare("SELECT cashier_id FROM cash_shifts WHERE branch_id=? AND status='open'").get(branchId as string)
-    if (shift && shift.cashier_id !== session.userId) throw new Error('Another cashier owns the open branch shift. Ask a manager to close it first.')
+    const ownShift = database.connection.prepare("SELECT 1 FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open'").get(branchId as string, session.userId)
+    if (!ownShift) {
+      const shift = database.connection.prepare("SELECT cashier_id FROM cash_shifts WHERE branch_id=? AND status='open'").get(branchId as string) as { cashier_id: string } | undefined
+      if (shift && shift.cashier_id !== session.userId) throw new Error('Another cashier owns the open branch shift. Ask a manager to close it first.')
+    }
   }
   if (channel === 'retail:receive-purchase') {
     const request = args[0] as { paidAmountPaisa?: unknown }

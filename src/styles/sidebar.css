@@ -1,69 +1,96 @@
-/* Sidebar palette: Deep Violet */
-.app-shell > .sidebar {
-  background: #211A3A;
-  border-right-color: #E4E7EF40;
+/* Sidebar palette: Deep Retail Violet & MedKit Smooth Animations */
+:root {
+  --sidebar-collapsed-width: 76px;
+  --sidebar-expanded-width: 256px;
+}
+
+.app-shell > .sidebar.medkit-sidebar {
+  background: #01152D;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
   color: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: var(--desktop-titlebar-height, 32px);
+  bottom: var(--desktop-footer-height, 28px);
+  height: var(--app-viewport-height, calc(100vh - 60px));
+  left: 0;
+  z-index: 50;
+  box-sizing: border-box;
+  overflow: hidden;
+  will-change: width;
+  width: var(--sidebar-collapsed-width);
+  transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+  padding: 0 !important;
+  box-shadow: none !important;
 }
-.app-shell > .sidebar .brand,
-.app-shell > .sidebar .branch-card strong {
-  color: #FFFFFF;
+
+.app-shell > .sidebar.medkit-sidebar.expanded,
+.app-shell.sidebar-expanded > .sidebar.medkit-sidebar,
+.app-shell.sidebar-locked > .sidebar.medkit-sidebar {
+  width: var(--sidebar-expanded-width) !important;
+  box-shadow: none !important;
 }
-.app-shell > .sidebar .nav-item {
-  color: #F3F0FF;
+
+/* Main Shell Content shifts with sidebar in smooth tandem */
+.app-shell .main-shell {
+  margin-left: var(--sidebar-collapsed-width) !important;
+  will-change: margin-left;
+  transition: margin-left 300ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  min-width: 0;
 }
-.app-shell > .sidebar .nav-item .icon {
-  color: #E4E7EF;
+
+.app-shell.sidebar-expanded .main-shell,
+.app-shell.sidebar-locked .main-shell {
+  margin-left: var(--sidebar-expanded-width) !important;
 }
-.app-shell > .sidebar .nav-item:hover {
-  color: #263248;
-  background: #F3F0FF;
+
+/* Hide scrollbar completely while keeping smooth scroll */
+.sidebar.medkit-sidebar nav,
+.sidebar.medkit-sidebar .scrollbar-none {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
-.app-shell > .sidebar .nav-item:hover .icon {
-  color: #6D4AFF;
+
+.sidebar.medkit-sidebar nav::-webkit-scrollbar,
+.sidebar.medkit-sidebar .scrollbar-none::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
-.app-shell > .sidebar .nav-item.active,
-.app-shell > .sidebar .nav-item.active:hover {
-  color: #FFFFFF;
-  background: #6D4AFF;
-  box-shadow: 0 6px 18px #6D4AFF52;
+
+/* Brand Logo (no white background, pure transparent retail logo) */
+.sidebar.medkit-sidebar .brand-logo,
+.sidebar.medkit-sidebar img {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
-.app-shell > .sidebar .nav-item.active .icon,
-.app-shell > .sidebar .nav-item.active:hover .icon {
-  color: #FFFFFF;
+
+/* Dropdown branch select */
+.sidebar.medkit-sidebar select {
+  background-color: #240a3f;
+  color: #ffffff;
 }
-.app-shell > .sidebar .nav-divider {
-  background: #E4E7EF55;
+
+/* Tooltip on collapsed items */
+.sidebar.medkit-sidebar .group:hover .absolute {
+  opacity: 1;
 }
-.app-shell > .sidebar .branch-card {
-  border-color: #E4E7EF42;
-  background: #FFFFFF0A;
-}
-.app-shell > .sidebar .branch-icon {
-  color: #F3F0FF;
-  background: #6D4AFF42;
-}
-.app-shell > .sidebar .branch-card small,
-.app-shell > .sidebar .version {
-  color: #E4E7EF;
-}
-.app-shell > .sidebar .sidebar-lock {
-  color: #F3F0FF;
-  border-color: #E4E7EF32;
-  background: #FFFFFF0A;
-}
-.app-shell > .sidebar .sidebar-lock:hover {
-  color: #263248;
-  border-color: #E4E7EF;
-  background: #F3F0FF;
-}
-.app-shell > .sidebar .sidebar-lock[aria-pressed="true"] {
-  color: #FFFFFF;
-  border-color: #6D4AFF;
-  background: #6D4AFF;
-}
-.app-shell > .sidebar .sidebar-lock > i {
-  background: #E4E7EF55;
-}
-.app-shell > .sidebar .sidebar-lock[aria-pressed="true"] > i {
-  background: #FFFFFF55;
+
+/* Responsive on small devices */
+@media (max-width: 768px) {
+  .app-shell > .sidebar.medkit-sidebar {
+    transform: translateX(-100%);
+    width: var(--sidebar-expanded-width) !important;
+    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .app-shell.sidebar-is-collapsed > .sidebar.medkit-sidebar,
+  .app-shell.sidebar-expanded > .sidebar.medkit-sidebar {
+    transform: translateX(0);
+  }
+  .app-shell .main-shell {
+    margin-left: 0 !important;
+  }
 }

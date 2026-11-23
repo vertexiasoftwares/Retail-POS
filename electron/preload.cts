@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import type { DashboardQuery, PosCompleteSaleRequest, PosCreateCustomerInput, PosCreateProductInput, PosCartLineInput, ProductCatalogQuery, ProductSaveInput, SalesListQuery, SalesReturnRequest, VertexiaDesktopApi } from '../src/types/desktop-api.js'
 
 const api: VertexiaDesktopApi = {
@@ -6,6 +6,12 @@ const api: VertexiaDesktopApi = {
     status: () => ipcRenderer.invoke('licensing:status'),
     activate: key => ipcRenderer.invoke('licensing:activate', key),
     refresh: () => ipcRenderer.invoke('licensing:refresh'),
+  },
+  cloudLicense: {
+    status: () => ipcRenderer.invoke('cloudLicense:status'),
+    register: reg => ipcRenderer.invoke('cloudLicense:register', reg),
+    activate: (key, businessId) => ipcRenderer.invoke('cloudLicense:activate', key, businessId),
+    refresh: () => ipcRenderer.invoke('cloudLicense:refresh'),
   },
   branches: {
     list: () => ipcRenderer.invoke('branches:list'),
@@ -104,6 +110,29 @@ const api: VertexiaDesktopApi = {
   system: {
     getDatabasePath: () => ipcRenderer.invoke('system:get-database-path'),
   },
+  zoom: {
+    setZoomFactor: (factor: number) => {
+      try { webFrame.setZoomFactor(factor) } catch {}
+      try { void ipcRenderer.invoke('desktop-set-zoom', factor) } catch {}
+    },
+    getZoomFactor: () => {
+      try { return webFrame.getZoomFactor() } catch { return 1 }
+    },
+    onZoomFactorChange: (callback: (factor: number) => void) => {
+      const listener = (_event: unknown, factor: number) => callback(factor)
+      ipcRenderer.on('desktop-zoom-changed', listener)
+      return () => ipcRenderer.removeListener('desktop-zoom-changed', listener)
+    },
+  },
 }
 
 contextBridge.exposeInMainWorld('vertexia', api)
+contextBridge.exposeInMainWorld('desktopApp', {
+  controlWindow: (action: string) => ipcRenderer.invoke('desktop-window-control', action),
+  getWindowState: () => ipcRenderer.invoke('desktop-window-state'),
+  onWindowStateChange: (callback: (state: any) => void) => {
+    const listener = (_event: any, state: any) => callback(state)
+    ipcRenderer.on('desktop-window-state-changed', listener)
+    return () => ipcRenderer.removeListener('desktop-window-state-changed', listener)
+  },
+})

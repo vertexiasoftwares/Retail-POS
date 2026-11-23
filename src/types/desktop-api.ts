@@ -288,11 +288,48 @@ export type RetailSnapshot = {
   supplierLedger:Array<{id:string;supplierId:string;businessDate:string;type:string;reference:string;debitPaisa:number;creditPaisa:number;balanceAfterPaisa:number;occurredAt:string}>
 }
 
+export type CloudRegistrationInput = {
+  businessId: string
+  businessName: string
+  ownerName: string
+  phone: string
+  email?: string
+  city: string
+  businessType?: string
+}
+
+export type CloudLicenseStatusOutput = {
+  status: 'ACTIVE' | 'ACTIVATION_REQUIRED' | 'EXPIRED' | 'SUSPENDED' | 'DEVICE_RELEASED' | 'BACKEND_UNAVAILABLE' | 'CLOCK_ERROR'
+  accessAllowed: boolean
+  businessId?: string
+  license_id?: string
+  license_type?: 'PERMANENT' | 'DATED'
+  expires_at?: string | null
+  offline_until?: string | null
+  last_verified_at?: string | null
+  message: string
+  contact?: {
+    companyName?: string
+    phone?: string
+    whatsapp?: string
+    email?: string
+    instructions?: string
+  }
+  deviceId: string
+  registration?: CloudRegistrationInput | null
+}
+
 export type VertexiaDesktopApi = {
   licensing: {
     status(): Promise<import('./licensing.js').LicenseStatus>
     activate(key: string): Promise<import('./licensing.js').LicenseStatus>
     refresh(): Promise<import('./licensing.js').LicenseStatus>
+  }
+  cloudLicense?: {
+    status(): Promise<CloudLicenseStatusOutput>
+    register(reg: CloudRegistrationInput): Promise<any>
+    activate(key: string, businessId?: string): Promise<CloudLicenseStatusOutput>
+    refresh(): Promise<CloudLicenseStatusOutput>
   }
   branches: {
     list(): Promise<import('./branches.js').BranchRecord[]>
@@ -387,4 +424,30 @@ export type VertexiaDesktopApi = {
   system: {
     getDatabasePath(): Promise<string>
   }
+  zoom?: {
+    setZoomFactor(factor: number): void
+    getZoomFactor(): number
+    onZoomFactorChange?(callback: (factor: number) => void): () => void
+  }
 }
+
+export type DesktopWindowState = {
+  maximized: boolean
+  fullscreen: boolean
+  minimized: boolean
+  version: string
+}
+
+export type DesktopWindowApp = {
+  controlWindow: (action: string) => Promise<DesktopWindowState | null>
+  getWindowState: () => Promise<DesktopWindowState | null>
+  onWindowStateChange: (callback: (state: DesktopWindowState) => void) => () => void
+}
+
+declare global {
+  interface Window {
+    vertexia?: VertexiaDesktopApi
+    desktopApp?: DesktopWindowApp
+  }
+}
+

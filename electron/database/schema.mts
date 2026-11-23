@@ -364,7 +364,7 @@ export const migrations = [
   {
     version: 7,
     sql: `
-      CREATE UNIQUE INDEX idx_cash_shifts_one_open ON cash_shifts(branch_id) WHERE status='open';
+      CREATE UNIQUE INDEX idx_cash_shifts_one_open ON cash_shifts(branch_id, cashier_id) WHERE status='open';
       CREATE TABLE cash_shift_closings (
         shift_id TEXT PRIMARY KEY REFERENCES cash_shifts(id),
         counted_cash_paisa INTEGER NOT NULL CHECK (counted_cash_paisa >= 0),

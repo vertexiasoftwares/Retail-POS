@@ -4,7 +4,7 @@ html:has(.top-navigation-shell) { scroll-padding-top: calc(var(--top-navigation-
 .app-navigation { position: sticky; top: 0; z-index: 35; background: #211a3a; color: #f3f0ff; box-shadow: 0 4px 18px #211a3a12; }
 .app-navigation-identity { display: flex; align-items: center; gap: 24px; padding: 10px 24px; border-bottom: 1px solid #ffffff16; }
 .app-navigation-brand { display: flex; flex-shrink: 0; align-items: center; gap: 10px; padding: 0; background: transparent; color: white; text-align: left; }
-.app-navigation-brand img { width: 40px; height: 40px; padding: 3px; object-fit: contain; border-radius: 11px; background: white; }
+.app-navigation-brand img { width: 44px; height: 44px; padding: 0; object-fit: contain; border-radius: 0; background: transparent !important; }
 .app-navigation-brand strong { display: block; font-size: 23px; line-height: 1.1; letter-spacing: -.5px; }
 .app-navigation-brand small { display: block; margin-top: 3px; font-size: 11px; color: #d5cce8; }
 .app-navigation .session-bar { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: #e4def0; }

@@ -33,6 +33,7 @@ import type {
 import { BranchRepository } from './branches.mjs'
 import { TransferRepository } from './transfers.mjs'
 import { migrations } from './schema.mjs'
+import { requestActorStorage } from './context.mjs'
 import { changeStockValue, openingStockValue, proportionalCost, stockCost } from './valuation.mjs'
 import { ReportsRepository } from './reports.mjs'
 import { CashRepository } from './cash.mjs'
@@ -123,6 +124,12 @@ function runMigrations(db: DatabaseSync) {
       throw error
     }
   }
+  try {
+    db.exec(`
+      DROP INDEX IF EXISTS idx_cash_shifts_one_open;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_shifts_one_open ON cash_shifts(branch_id, cashier_id) WHERE status='open';
+    `)
+  } catch {}
 }
 
 function seedDatabase(db: DatabaseSync, now: Date, includeDemoData: boolean) {
@@ -288,13 +295,21 @@ export class VertexiaDatabase {
     runMigrations(this.connection)
     seedDatabase(this.connection, this.now(),options.seedDemoData === true)
     this.businessId = String((this.connection.prepare('SELECT id FROM businesses ORDER BY created_at LIMIT 1').get() as SqlRow).id)
-    this.retail = new RetailRepository(this.connection, this.businessId, () => this.actorId, this.now)
-    this.cash = new CashRepository(this.connection, this.businessId, () => this.actorId, this.now)
-    this.accounts = new AccountsRepository(this.connection, this.businessId, () => this.actorId, this.now)
+    this.retail = new RetailRepository(this.connection, this.businessId, () => this.getActorId(), this.now)
+    this.cash = new CashRepository(this.connection, this.businessId, () => this.getActorId(), this.now)
+    this.accounts = new AccountsRepository(this.connection, this.businessId, () => this.getActorId(), this.now)
     this.reports = new ReportsRepository(this.connection, this.businessId, this.now)
-    this.branches = new BranchRepository(this.connection, this.businessId, () => this.actorId, this.now)
-    this.transfers = new TransferRepository(this.connection, this.businessId, () => this.actorId, this.now)
+    this.branches = new BranchRepository(this.connection, this.businessId, () => this.getActorId(), this.now)
+    this.transfers = new TransferRepository(this.connection, this.businessId, () => this.getActorId(), this.now)
     } catch (error) { this.connection.close(); throw error }
+  }
+
+  getActorId(): string {
+    const context = requestActorStorage.getStore()
+    if (context?.userId) {
+      return context.userId
+    }
+    return this.actorId
   }
 
   setActor(userId: string) {
@@ -338,9 +353,9 @@ export class VertexiaDatabase {
     const lowProducts = (this.connection.prepare(`SELECT p.id,p.name,p.visual_kind,sl.quantity_milli AS quantity FROM stock_levels sl JOIN products p ON p.id=sl.product_id WHERE sl.branch_id=? AND p.is_active=1 AND sl.quantity_milli<=p.minimum_stock_milli ORDER BY sl.quantity_milli ASC,p.name LIMIT 5`).all(branchId) as SqlRow[]).map(row => ({ id:String(row.id),name:String(row.name),kind:String(row.visual_kind),quantityMilli:Number(row.quantity) }))
     const recentSales = (this.connection.prepare(`SELECT s.id,s.invoice_number,c.name AS customer_name,s.total_paisa,s.completed_at,COALESCE((SELECT GROUP_CONCAT(method, ', ') FROM sale_payments WHERE sale_id=s.id),'Unpaid') AS payment_method FROM sales s JOIN customers c ON c.id=s.customer_id WHERE s.branch_id=? AND s.status='completed' ORDER BY s.completed_at DESC LIMIT 5`).all(branchId) as SqlRow[]).map(row => ({ id:String(row.id),invoiceNumber:String(row.invoice_number),customerName:String(row.customer_name),totalPaisa:Number(row.total_paisa),paymentMethod:String(row.payment_method),completedAt:String(row.completed_at) })) as DashboardSaleRow[]
     const recentActivity = (this.connection.prepare(`SELECT id,occurred_at,event_type,description,COALESCE(reference,'') AS reference FROM audit_events WHERE branch_id=? ORDER BY occurred_at DESC LIMIT 5`).all(branchId) as SqlRow[]).map(row => ({ id:String(row.id),occurredAt:String(row.occurred_at),type:String(row.event_type),description:String(row.description),reference:String(row.reference) })) as DashboardActivityRow[]
-    const activeDrawer = this.connection.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND status='open'").get(branchId) as SqlRow | undefined
-    const cashInDrawer = activeDrawer ? this.cash.expected(String(activeDrawer.id)) : 0
-    const user = this.connection.prepare('SELECT name,role FROM users WHERE id=?').get(this.actorId) as SqlRow
+    const activeDrawers = this.connection.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND status='open'").all(branchId) as SqlRow[]
+    const cashInDrawer = activeDrawers.reduce((sum, d) => sum + this.cash.expected(String(d.id)), 0)
+    const user = this.connection.prepare('SELECT name,role FROM users WHERE id=?').get(this.getActorId()) as SqlRow
     const business = this.connection.prepare('SELECT name FROM businesses WHERE id=?').get(this.businessId) as SqlRow
     const sales = Number(current.sales)
     const profit = Number(current.profit)
@@ -370,10 +385,12 @@ export class VertexiaDatabase {
       id:String(row.id),name:String(row.name),phone:row.phone === null ? null : String(row.phone),isWalkIn:Number(row.is_walk_in) === 1,balancePaisa:Number(row.balance),
     })) as PosCustomer[]
     const heldSales = (this.connection.prepare(`SELECT id,customer_id,item_count,total_paisa,held_at FROM held_sales WHERE branch_id=? ORDER BY held_at DESC`).all(branchId) as SqlRow[]).map(row => ({ id:String(row.id),customerId:String(row.customer_id),itemCount:Number(row.item_count),totalPaisa:Number(row.total_paisa),heldAt:String(row.held_at) }))
-    const activeShift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(branchId) as SqlRow | undefined
-    const user = this.connection.prepare('SELECT name,role FROM users WHERE id=?').get(this.actorId) as SqlRow
+    const actorId = this.getActorId()
+    const activeShift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(branchId, actorId) as SqlRow | undefined
+      ?? (!requestActorStorage.getStore() ? this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(branchId) as SqlRow | undefined : undefined)
+    const user = this.connection.prepare('SELECT name,role FROM users WHERE id=?').get(actorId) as SqlRow
     return {
-      branchId,businessName:String(branch.business_name),branchName:String(branch.name),userName:String(user.name),userRole:String(user.role),activeShiftId:activeShift ? String(activeShift.id) : null,
+      branchId,businessName:String(branch.business_name),branchName:String(branch.name),userName:String(user?.name ?? 'Unknown'),userRole:String(user?.role ?? 'Cashier'),activeShiftId:activeShift ? String(activeShift.id) : null,
       lowStockCount:products.filter(product => product.quantityMilli <= product.minimumStockMilli).length,
       products,customers,categories:[...new Set(products.map(product => product.category))].sort(),heldSales,
     }
@@ -409,7 +426,11 @@ export class VertexiaDatabase {
     return postOperation(this.connection, request.branchId, request.operationId, 'sale.post', request, this.now().toISOString(), () => {
       const branch = this.connection.prepare('SELECT business_id FROM branches WHERE id=? AND is_active=1').get(request.branchId) as SqlRow | undefined
       if (!branch) throw new Error('The selected branch is unavailable.')
-      const shift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId) as SqlRow | undefined
+      const actorId = this.getActorId()
+      let shift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId, actorId) as SqlRow | undefined
+      if (!shift && !requestActorStorage.getStore()) {
+        shift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId) as SqlRow | undefined
+      }
       if (!shift) throw new Error('Open a cash shift before completing a sale.')
       const customer = this.connection.prepare('SELECT id,name,is_walk_in FROM customers WHERE id=? AND business_id=? AND is_active=1').get(request.customerId,String(branch.business_id)) as SqlRow | undefined
       if (!customer) throw new Error('Select a valid customer.')
@@ -429,7 +450,7 @@ export class VertexiaDatabase {
       const completedAt = now.toISOString()
       const invoiceNumber = nextDocumentNumber(this.connection, request.branchId, 'sale', date)
       const saleId = `sale-${randomUUID()}`
-      this.connection.prepare('INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(saleId,String(branch.business_id),request.branchId,invoiceNumber,date,request.customerId,this.actorId,subtotalPaisa,discountPaisa,totalPaisa,costPaisa,'completed',completedAt)
+      this.connection.prepare('INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(saleId,String(branch.business_id),request.branchId,invoiceNumber,date,request.customerId,actorId,subtotalPaisa,discountPaisa,totalPaisa,costPaisa,'completed',completedAt)
       const insertItem = this.connection.prepare('INSERT INTO sale_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       const updateStock = this.connection.prepare('UPDATE stock_levels SET quantity_milli=quantity_milli-?,updated_at=? WHERE branch_id=? AND product_id=? AND quantity_milli>=?')
       const insertMovement = this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -446,7 +467,7 @@ export class VertexiaDatabase {
       this.connection.prepare('INSERT INTO sale_payments VALUES (?, ?, ?, ?)').run(`sale-payment-${randomUUID()}`,saleId,request.paymentMethod,paidAmount)
       if (request.paymentMethod === 'Udhaar') this.connection.prepare('INSERT INTO customer_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(`customer-ledger-${randomUUID()}`,request.branchId,request.customerId,'sale',totalPaisa,0,saleId,completedAt)
       if (request.paymentMethod === 'Cash') this.connection.prepare('INSERT INTO cash_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`cash-${randomUUID()}`,String(shift.id),request.branchId,date,'cash_sale','in',totalPaisa,'Cash',saleId,completedAt)
-      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,request.branchId,this.actorId,'Sale','sale',saleId,'Sale completed',invoiceNumber,completedAt)
+      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,request.branchId,actorId,'Sale','sale',saleId,'Sale completed',invoiceNumber,completedAt)
       const cashReceivedPaisa = request.paymentMethod === 'Cash' ? request.cashReceivedPaisa : totalPaisa
       return { saleId,invoiceNumber,completedAt,customerName:String(customer.name),paymentMethod:request.paymentMethod,subtotalPaisa,discountPaisa,totalPaisa,cashReceivedPaisa,changePaisa:request.paymentMethod === 'Cash' ? cashReceivedPaisa-totalPaisa : 0,lines:lines.map(line => ({ name:line.name,quantityMilli:line.quantityMilli,unitPricePaisa:line.unitPricePaisa,discountPaisa:line.discountPaisa,lineTotalPaisa:line.lineTotalPaisa })) }
     })
@@ -488,11 +509,13 @@ export class VertexiaDatabase {
     const request = { branchId, openingCashPaisa, operationId }
     return postOperation(this.connection, branchId, operationId, 'shift.open', request, occurredAt, () => {
       if (!this.connection.prepare('SELECT 1 FROM branches WHERE id=? AND business_id=? AND is_active=1').get(branchId, this.businessId)) throw new Error('Branch is unavailable.')
-      if (this.connection.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND status='open'").get(branchId)) throw new Error('A shift is already open.')
+      const actorId = this.getActorId()
+      const existing = this.connection.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open'").get(branchId, actorId)
+      if (existing) throw new Error('A shift is already open.')
       const shiftId = 'shift-' + randomUUID()
-      this.connection.prepare('INSERT INTO cash_shifts VALUES (?,?,?,?,?,?,?)').run(shiftId, branchId, this.actorId, openingCashPaisa, 'open', occurredAt, null)
+      this.connection.prepare('INSERT INTO cash_shifts VALUES (?,?,?,?,?,?,?)').run(shiftId, branchId, actorId, openingCashPaisa, 'open', occurredAt, null)
       this.connection.prepare('INSERT INTO cash_transactions VALUES (?,?,?,?,?,?,?,?,?,?)').run('cash-' + randomUUID(), shiftId, branchId, businessDate(now), 'opening_cash', 'in', openingCashPaisa, 'Cash', shiftId, occurredAt)
-      this.connection.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run('audit-' + randomUUID(), branchId, this.actorId, 'Shift', 'cash_shift', shiftId, 'Cash shift opened', 'Opening paisa: ' + openingCashPaisa, occurredAt)
+      this.connection.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run('audit-' + randomUUID(), branchId, actorId, 'Shift', 'cash_shift', shiftId, 'Cash shift opened', 'Opening paisa: ' + openingCashPaisa, occurredAt)
       return shiftId
     })
   }
@@ -515,7 +538,7 @@ export class VertexiaDatabase {
       this.connection.prepare('INSERT INTO stock_levels VALUES (?, ?, ?, ?)').run(branchId,id,input.openingStockMilli,now)
       if (input.openingStockMilli > 0) this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`stock-${randomUUID()}`,branchId,id,'opening_stock',input.openingStockMilli,input.openingStockMilli,'product',id,'Opening stock',now)
       openingStockValue(this.connection,branchId,id,input.openingStockMilli,input.purchasePricePaisa,now)
-      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.actorId,'Product','product',id,'Custom product created',name,now)
+      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.getActorId(),'Product','product',id,'Custom product created',name,now)
       this.connection.exec('COMMIT')
       return { id,sku,barcode,name,category,unit,kind:'box',sellingPricePaisa:input.sellingPricePaisa,quantityMilli:input.openingStockMilli,minimumStockMilli:0 }
     } catch (error) {
@@ -599,13 +622,13 @@ export class VertexiaDatabase {
         const existing=this.connection.prepare('SELECT id FROM products WHERE id=? AND business_id=?').get(id,String(branch.business_id))
         if(!existing) throw new Error('Product was not found.')
         this.connection.prepare(`UPDATE products SET sku=?,barcode=?,name=?,category=?,subcategory=?,brand=?,unit=?,purchase_price_paisa=?,selling_price_paisa=?,mrp_paisa=?,minimum_stock_milli=?,is_active=?,image_data_url=?,updated_at=? WHERE id=?`).run(normalized.sku,normalized.barcode,normalized.name,normalized.category,normalized.subcategory,normalized.brand||null,normalized.unit,normalized.purchasePricePaisa,normalized.sellingPricePaisa,normalized.mrpPaisa,normalized.minimumStockMilli,normalized.status==='active'?1:0,normalized.imageDataUrl,now,id)
-        this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.actorId,'Product','product',id,'Product updated',normalized.name,now)
+        this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.getActorId(),'Product','product',id,'Product updated',normalized.name,now)
       } else {
         this.connection.prepare(`INSERT INTO products(id,business_id,sku,barcode,name,category,brand,unit,visual_kind,purchase_price_paisa,selling_price_paisa,minimum_stock_milli,is_active,created_at,updated_at,subcategory,mrp_paisa,image_data_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,String(branch.business_id),normalized.sku,normalized.barcode,normalized.name,normalized.category,normalized.brand||null,normalized.unit,'box',normalized.purchasePricePaisa,normalized.sellingPricePaisa,normalized.minimumStockMilli,normalized.status==='active'?1:0,now,now,normalized.subcategory,normalized.mrpPaisa,normalized.imageDataUrl)
         this.connection.prepare('INSERT INTO stock_levels VALUES (?, ?, ?, ?)').run(branchId,id,normalized.openingStockMilli,now)
         if(normalized.openingStockMilli>0) this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`stock-${randomUUID()}`,branchId,id,'opening_stock',normalized.openingStockMilli,normalized.openingStockMilli,'product',id,'Opening stock',now)
         openingStockValue(this.connection,branchId,id,normalized.openingStockMilli,normalized.purchasePricePaisa,now)
-        this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.actorId,'Product','product',id,'Product created',normalized.name,now)
+        this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.getActorId(),'Product','product',id,'Product created',normalized.name,now)
       }
       this.connection.exec('COMMIT')
       return this.getProductRecord(id,branchId)
@@ -623,7 +646,7 @@ export class VertexiaDatabase {
     const status=Number(row.is_active)===1?'inactive':'active'
     const now=this.now().toISOString()
     this.connection.prepare('UPDATE products SET is_active=?,updated_at=? WHERE id=?').run(status==='active'?1:0,now,id)
-    this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.actorId,'Product','product',id,`Product ${status==='active'?'activated':'deactivated'}`,String(row.name),now)
+    this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.getActorId(),'Product','product',id,`Product ${status==='active'?'activated':'deactivated'}`,String(row.name),now)
     return status
   }
 
@@ -649,7 +672,7 @@ export class VertexiaDatabase {
     this.connection.exec('BEGIN IMMEDIATE')
     try {
       for(const input of inputs){const id=`product-${randomUUID()}`;this.connection.prepare(`INSERT INTO products(id,business_id,sku,barcode,name,category,brand,unit,visual_kind,purchase_price_paisa,selling_price_paisa,minimum_stock_milli,is_active,created_at,updated_at,subcategory,mrp_paisa,image_data_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,String(branch.business_id),input.sku,input.barcode,input.name,input.category,input.brand||null,input.unit,'box',input.purchasePricePaisa,input.sellingPricePaisa,input.minimumStockMilli,input.status==='active'?1:0,now,now,input.subcategory,input.mrpPaisa,null);this.connection.prepare('INSERT INTO stock_levels VALUES (?, ?, ?, ?)').run(branchId,id,input.openingStockMilli,now);if(input.openingStockMilli>0)this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`stock-${randomUUID()}`,branchId,id,'opening_stock',input.openingStockMilli,input.openingStockMilli,'product',id,'CSV import',now);openingStockValue(this.connection,branchId,id,input.openingStockMilli,input.purchasePricePaisa,now)}
-      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.actorId,'Product','product_import',`import-${randomUUID()}`,`${inputs.length} products imported`,'CSV',now)
+      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.getActorId(),'Product','product_import',`import-${randomUUID()}`,`${inputs.length} products imported`,'CSV',now)
       this.connection.exec('COMMIT')
       return { imported:inputs.length }
     } catch(error){this.connection.exec('ROLLBACK');throw error}
@@ -776,16 +799,23 @@ export class VertexiaDatabase {
       if(totalPaisa<=0) throw new Error('Return amount must be greater than zero.')
       const now=this.now(),occurredAt=now.toISOString(),date=businessDate(now)
       let shift:SqlRow|undefined
-      if(paymentMethod==='Cash'){shift=this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId) as SqlRow|undefined;if(!shift)throw new Error('Open a cash shift before issuing a cash refund.')}
+      const actorId = this.getActorId()
+      if(paymentMethod==='Cash'){
+        shift=this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId, actorId) as SqlRow|undefined
+        if(!shift && !requestActorStorage.getStore()){
+          shift=this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId) as SqlRow|undefined
+        }
+        if(!shift)throw new Error('Open a cash shift before issuing a cash refund.')
+      }
       const returnId=`sale-return-${randomUUID()}`,returnNumber=nextDocumentNumber(this.connection,request.branchId,'return',date)
-      this.connection.prepare('INSERT INTO sale_returns VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(returnId,request.saleId,request.branchId,returnNumber,reason,paymentMethod,totalPaisa,costPaisa,this.actorId,occurredAt)
+      this.connection.prepare('INSERT INTO sale_returns VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(returnId,request.saleId,request.branchId,returnNumber,reason,paymentMethod,totalPaisa,costPaisa,actorId,occurredAt)
       const insertItem=this.connection.prepare('INSERT INTO sale_return_items VALUES (?, ?, ?, ?, ?, ?, ?)')
       for(const line of lines){const movementId=`stock-${randomUUID()}`;insertItem.run(`sale-return-item-${randomUUID()}`,returnId,line.id,line.productId,line.quantityMilli,line.refundPaisa,line.costPaisa);this.connection.prepare('UPDATE stock_levels SET quantity_milli=quantity_milli+?,updated_at=? WHERE branch_id=? AND product_id=?').run(line.quantityMilli,occurredAt,request.branchId,line.productId);const stock=this.connection.prepare('SELECT quantity_milli FROM stock_levels WHERE branch_id=? AND product_id=?').get(request.branchId,line.productId) as SqlRow;this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(movementId,request.branchId,line.productId,'sale_return',line.quantityMilli,Number(stock.quantity_milli),'sale_return',returnId,returnNumber,occurredAt);changeStockValue(this.connection,request.branchId,line.productId,line.costPaisa,line.costEstimated,occurredAt,movementId)}
       if(paymentMethod==='Cash')this.connection.prepare('INSERT INTO cash_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`cash-${randomUUID()}`,String(shift!.id),request.branchId,date,'sale_refund','out',totalPaisa,'Cash',returnId,occurredAt)
       if(paymentMethod==='Udhaar')this.connection.prepare('INSERT INTO customer_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(`customer-ledger-${randomUUID()}`,request.branchId,String(sale.customer_id),'sale_return',0,totalPaisa,returnId,occurredAt)
       const remaining=scalarValue(this.connection,`SELECT COALESCE(SUM(si.quantity_milli-COALESCE((SELECT SUM(sri.quantity_milli) FROM sale_return_items sri WHERE sri.sale_item_id=si.id),0)),0) AS value FROM sale_items si WHERE si.sale_id=?`,request.saleId)
       if(remaining===0)this.connection.prepare(`UPDATE sales SET status='returned' WHERE id=?`).run(request.saleId)
-      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,request.branchId,this.actorId,'Sale Return','sale_return',returnId,'Sale return completed',`${returnNumber} · ${String((this.connection.prepare('SELECT invoice_number FROM sales WHERE id=?').get(request.saleId) as SqlRow).invoice_number)}`,occurredAt)
+      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,request.branchId,actorId,'Sale Return','sale_return',returnId,'Sale return completed',`${returnNumber} · ${String((this.connection.prepare('SELECT invoice_number FROM sales WHERE id=?').get(request.saleId) as SqlRow).invoice_number)}`,occurredAt)
       return{returnId,returnNumber,refundMethod:paymentMethod,totalPaisa,occurredAt}
     })
   }

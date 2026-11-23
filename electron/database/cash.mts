@@ -25,7 +25,11 @@ export class CashRepository {
   snapshot(branchId: string, userId?: string): CashSnapshot {
     this.branch(branchId)
     // Cashiers see their own shifts; owner/manager views include the whole branch.
-    const rows = this.db.prepare(`SELECT s.*,u.name AS cashier_name,c.counted_cash_paisa,c.expected_cash_paisa,c.variance_paisa,c.note,cu.name AS closed_by_name FROM cash_shifts s JOIN users u ON u.id=s.cashier_id LEFT JOIN cash_shift_closings c ON c.shift_id=s.id LEFT JOIN users cu ON cu.id=c.closed_by WHERE s.branch_id=? ${userId ? 'AND s.cashier_id=?' : ''} ORDER BY s.opened_at DESC,s.rowid DESC LIMIT 100`).all(...(userId ? [branchId, userId] : [branchId])) as Row[]
+    const actorId = this.actor()
+    const user = this.db.prepare("SELECT role FROM users WHERE id=?").get(actorId) as Row | undefined
+    const isManagerOrOwner = user?.role === 'Owner' || user?.role === 'Manager'
+    const targetUserId = isManagerOrOwner ? userId : (userId ?? actorId)
+    const rows = this.db.prepare(`SELECT s.*,u.name AS cashier_name,c.counted_cash_paisa,c.expected_cash_paisa,c.variance_paisa,c.note,cu.name AS closed_by_name FROM cash_shifts s JOIN users u ON u.id=s.cashier_id LEFT JOIN cash_shift_closings c ON c.shift_id=s.id LEFT JOIN users cu ON cu.id=c.closed_by WHERE s.branch_id=? ${targetUserId ? 'AND s.cashier_id=?' : ''} ORDER BY s.opened_at DESC,s.rowid DESC LIMIT 100`).all(...(targetUserId ? [branchId, targetUserId] : [branchId])) as Row[]
     const shifts = rows.map(row => this.record(row))
     const activeShift = shifts.find(shift => shift.status === 'open') ?? null
     const selected = activeShift ?? shifts[0]
@@ -40,13 +44,22 @@ export class CashRepository {
     requireText(request.operationId, 'Operation identifier', 100)
     return postOperation(this.db, request.branchId, request.operationId, 'shift.close', request, this.now().toISOString(), () => {
       this.active(request.branchId, request.shiftId)
+      const actorId = this.actor()
+      const shift = this.db.prepare('SELECT cashier_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, request.branchId) as Row | undefined
+      if (!shift) throw new Error('Invalid cash shift.')
+      if (shift.cashier_id !== actorId) {
+        const user = this.db.prepare('SELECT role FROM users WHERE id=?').get(actorId) as Row | undefined
+        if (user?.role !== 'Owner' && user?.role !== 'Manager') {
+          throw new Error('You can only close your own cash shift.')
+        }
+      }
       const expected = this.expected(request.shiftId), variance = counted - expected
       if (!Number.isSafeInteger(variance)) throw new Error('Cash variance is outside the supported range.')
       if (variance !== 0 && note.length < 3) throw new Error('Explain the cash shortage or excess before closing.')
       const time = this.now().toISOString()
-      this.db.prepare('INSERT INTO cash_shift_closings VALUES (?,?,?,?,?,?,?)').run(request.shiftId, counted, expected, variance, note, this.actor(), time)
+      this.db.prepare('INSERT INTO cash_shift_closings VALUES (?,?,?,?,?,?,?)').run(request.shiftId, counted, expected, variance, note, actorId, time)
       this.db.prepare("UPDATE cash_shifts SET status='closed',closed_at=? WHERE id=?").run(time, request.shiftId)
-      this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, this.actor(), 'Shift', 'cash_shift', request.shiftId, 'Cash shift closed and reconciled', `Variance paisa: ${variance}`, time)
+      this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Shift', 'cash_shift', request.shiftId, 'Cash shift closed and reconciled', `Variance paisa: ${variance}`, time)
       return this.snapshot(request.branchId).shifts.find(shift => shift.id === request.shiftId)!
     })
   }
@@ -58,12 +71,21 @@ export class CashRepository {
     requireText(request.operationId, 'Operation identifier', 100)
     return postOperation(this.db, request.branchId, request.operationId, 'cash.move', request, this.now().toISOString(), () => {
       this.active(request.branchId, request.shiftId)
+      const actorId = this.actor()
+      const shift = this.db.prepare('SELECT cashier_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, request.branchId) as Row | undefined
+      if (!shift) throw new Error('Invalid cash shift.')
+      if (shift.cashier_id !== actorId) {
+        const user = this.db.prepare('SELECT role FROM users WHERE id=?').get(actorId) as Row | undefined
+        if (user?.role !== 'Owner' && user?.role !== 'Manager') {
+          throw new Error('You can only move cash in your own shift.')
+        }
+      }
       const next = this.expected(request.shiftId) + (request.direction === 'in' ? amount : -amount)
       requireSafeInteger(next, 'Resulting drawer cash')
       const id = `cash-${randomUUID()}`, time = this.now().toISOString()
       this.db.prepare('INSERT INTO cash_transactions VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, request.shiftId, request.branchId, retailBusinessDate(this.now()), request.direction === 'in' ? 'cash_in' : 'withdrawal', request.direction, amount, 'Cash', id, time)
-      this.db.prepare('INSERT INTO cash_movement_notes VALUES (?,?,?)').run(id, reason, this.actor())
-      this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, this.actor(), 'Cash', 'cash_transaction', id, reason, `${request.direction} ${amount} paisa`, time)
+      this.db.prepare('INSERT INTO cash_movement_notes VALUES (?,?,?)').run(id, reason, actorId)
+      this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Cash', 'cash_transaction', id, reason, `${request.direction} ${amount} paisa`, time)
       return { transactionId: id, expectedCashPaisa: next }
     })
   }

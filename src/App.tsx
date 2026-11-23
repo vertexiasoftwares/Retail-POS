@@ -5,13 +5,15 @@ import type { PageName } from './types'
 import './styles/index.css'
 import { AuthProvider } from './app/auth/AuthContext'
 import { useAuth } from './app/auth/useAuth'
+import { GlobalZoom } from './shared/layout/GlobalZoom'
+import { DesktopShell } from './shared/layout/DesktopShell'
 
 function AuthenticatedApp() {
   const { session, canPage } = useAuth()
   const [activePage, setActivePage] = useState<PageName>(() => hashToPage[window.location.hash] ?? 'POS')
 
   const navigate = (requestedPage: string) => {
-    const page = requestedPage in pages && canPage(requestedPage) ? requestedPage as PageName : canPage('POS') ? 'POS' : 'Products'
+    const page = requestedPage in pages && canPage(requestedPage) ? (requestedPage as PageName) : canPage('POS') ? 'POS' : 'Products'
     setActivePage(page)
     window.history.replaceState(null, '', pageToHash[page])
     window.scrollTo(0, 0)
@@ -20,9 +22,22 @@ function AuthenticatedApp() {
   const permittedPage = canPage(activePage) ? activePage : canPage('POS') ? 'POS' : 'Products'
   const ActivePage = pages[permittedPage]
   const props = { onNavigate: navigate }
-  return <RetailDataProvider key={session!.userId + ':' + session!.branchId}><ActivePage {...props} /></RetailDataProvider>
+  return (
+    <RetailDataProvider key={session!.userId + ':' + session!.branchId}>
+      <ActivePage {...props} />
+    </RetailDataProvider>
+  )
 }
 
-function App() { return <AuthProvider><AuthenticatedApp /></AuthProvider> }
+function App() {
+  return (
+    <DesktopShell>
+      <GlobalZoom />
+      <AuthProvider>
+        <AuthenticatedApp />
+      </AuthProvider>
+    </DesktopShell>
+  )
+}
 
 export default App

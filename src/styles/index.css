@@ -1,4 +1,5 @@
-﻿@import './base.css';
+@import './typography.css';
+@import './base.css';
 @import '../features/dashboard/dashboard.css';
 @import '../features/pos/pos.css';
 @import './responsive.css';
@@ -18,3 +19,4 @@
 @import '../features/products/products.css';
 @import './overrides.css';
 @import './top-navigation.css';
+@import './medkit-pages.css';

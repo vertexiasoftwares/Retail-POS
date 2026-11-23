@@ -53,7 +53,9 @@ export class AccountsRepository {
     this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(id('audit'), branchId, this.actor(), type, type === 'Customer' ? 'customer' : type === 'Customer Payment' ? 'customer_receipt' : 'expense', entityId, description, reference, time)
   }
   private cash(branchId: string, type: string, direction: 'in' | 'out', amount: number, reference: string, time: string) {
-    const shift = this.db.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND status='open'").get(branchId)
+    const actorId = this.actor()
+    const shift = this.db.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open'").get(branchId, actorId)
+      ?? this.db.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1").get(branchId)
     if (!shift) throw new Error('Open a cash shift before recording a cash payment or expense.')
     const balance = safe(this.db.prepare("SELECT COALESCE(SUM(CASE direction WHEN 'in' THEN amount_paisa ELSE -amount_paisa END),0) AS n FROM cash_transactions WHERE shift_id=?").get(String(shift.id))!.n)
     const next = safe(balance + (direction === 'in' ? amount : -amount))

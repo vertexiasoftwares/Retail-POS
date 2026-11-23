@@ -1,0 +1,120 @@
+import type { FastifyInstance } from 'fastify';
+import type { VertexiaDatabase } from '../../electron/database/database.mjs';
+import type { AuthRepository } from '../../electron/database/auth.mjs';
+import type { RealtimeSyncServer } from '../websocket.mjs';
+import type {
+  StockAdjustmentRequest,
+  PurchaseReceiveRequest,
+  SupplierPayRequest,
+} from '../../src/types/desktop-api.js';
+import { enforceAuth, ensureOperationId } from '../auth-guard.mjs';
+
+export function registerRetailRoutes(
+  app: FastifyInstance,
+  db: VertexiaDatabase,
+  auth: AuthRepository,
+  sync?: RealtimeSyncServer
+): void {
+  // GET /api/retail/snapshot?branchId=...
+  app.get('/api/retail/snapshot', async (request, reply) => {
+    const query = request.query as { branchId?: string };
+    if (!query.branchId) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'retail.read', query.branchId);
+    if (!guarded) return;
+
+    try {
+      const snapshot = db.retail.getSnapshot(query.branchId);
+      return snapshot;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'RetailSnapshotError', message: err?.message || 'Failed to load retail snapshot.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/retail/adjust-stock
+  app.post('/api/retail/adjust-stock', async (request, reply) => {
+    const body = request.body as StockAdjustmentRequest | undefined;
+    if (!body || !body.branchId) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'stock.adjust', body.branchId, true);
+    if (!guarded) return;
+
+    try {
+      const result = db.retail.adjustStock(ensureOperationId(body, guarded.session.userId));
+      sync?.broadcast({
+        type: 'inventory:changed',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+      });
+      return result;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'StockAdjustmentError', message: err?.message || 'Failed to adjust stock.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/retail/receive-purchase
+  app.post('/api/retail/receive-purchase', async (request, reply) => {
+    const body = request.body as PurchaseReceiveRequest | undefined;
+    if (!body || !body.branchId) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'purchases.receive', body.branchId, true);
+    if (!guarded) return;
+
+    // If paid amount > 0, also require suppliers.pay
+    if (body.paidAmountPaisa > 0 && !guarded.session.permissions.includes('suppliers.pay')) {
+      return reply.status(403).send({ error: 'Forbidden', message: 'You do not have permission to pay suppliers.', statusCode: 403 });
+    }
+
+    try {
+      const result = db.retail.receivePurchase(ensureOperationId(body, guarded.session.userId));
+      sync?.broadcast({
+        type: 'purchase:received',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+        payload: { purchaseId: result.purchaseId, totalPaisa: result.totalPaisa },
+      });
+      sync?.broadcast({
+        type: 'inventory:changed',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+      });
+      if (body.paidAmountPaisa > 0 && body.paymentMethod === 'Cash') {
+        sync?.broadcast({
+          type: 'cash:updated',
+          branchId: body.branchId,
+          businessId: guarded.session.businessId,
+        });
+      }
+      return result;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'ReceivePurchaseError', message: err?.message || 'Failed to receive purchase.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/retail/pay-supplier
+  app.post('/api/retail/pay-supplier', async (request, reply) => {
+    const body = request.body as SupplierPayRequest | undefined;
+    if (!body || !body.branchId) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'suppliers.pay', body.branchId, true);
+    if (!guarded) return;
+
+    try {
+      const result = db.retail.paySupplier(ensureOperationId(body, guarded.session.userId));
+      if (body.method === 'Cash') {
+        sync?.broadcast({
+          type: 'cash:updated',
+          branchId: body.branchId,
+          businessId: guarded.session.businessId,
+        });
+      }
+      return result;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'PaySupplierError', message: err?.message || 'Failed to pay supplier.', statusCode: 400 });
+    }
+  });
+}

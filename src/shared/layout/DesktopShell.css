@@ -1,0 +1,300 @@
+.desktop-shell {
+  --desktop-titlebar-height: 32px;
+  --desktop-footer-height: 28px;
+  --app-viewport-height: calc(100dvh - var(--desktop-titlebar-height) - var(--desktop-footer-height));
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  width: 100vw;
+  overflow: hidden;
+  background: #f8fafc;
+  font-family: var(--font-body, 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+}
+
+/* ========================================================================= */
+/* Thin & Sleek Titlebar Header                                              */
+/* ========================================================================= */
+.desktop-titlebar {
+  position: relative;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 var(--desktop-titlebar-height);
+  height: var(--desktop-titlebar-height);
+  color: #334155;
+  background: #ffffff;
+  border-top: 2px solid #5E0CF3;
+  border-bottom: 1px solid #e2e8f0;
+  -webkit-app-region: no-drag;
+  user-select: none;
+}
+
+.desktop-titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding-left: 14px;
+  -webkit-app-region: drag;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.desktop-brand-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+.desktop-brand-icon img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+
+.desktop-brand-name {
+  color: #0f172a;
+  font-family: var(--font-heading, 'DM Sans', sans-serif);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+}
+
+.desktop-brand-name span {
+  color: #5E0CF3;
+  margin-left: 2px;
+}
+
+.desktop-titlebar-caption {
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid #cbd5e1;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.desktop-titlebar-dragspace {
+  flex: 1;
+  align-self: stretch;
+  min-width: 10px;
+  -webkit-app-region: drag;
+}
+
+.desktop-titlebar-fullscreen .desktop-titlebar-brand,
+.desktop-titlebar-fullscreen .desktop-titlebar-dragspace {
+  -webkit-app-region: no-drag;
+}
+
+.desktop-titlebar-actions {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  height: 100%;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.desktop-fullscreen-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 100%;
+  border: 0;
+  border-left: 1px solid #e2e8f0;
+  color: #64748b;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 120ms, color 120ms;
+  white-space: nowrap;
+}
+
+.desktop-fullscreen-button:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.desktop-window-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  border-left: 1px solid #e2e8f0;
+  -webkit-app-region: no-drag;
+}
+
+.desktop-window-controls button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #475569;
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.desktop-window-controls button:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.desktop-window-controls button:focus-visible,
+.desktop-fullscreen-button:focus-visible {
+  outline: 2px solid #5E0CF3;
+  outline-offset: -2px;
+}
+
+.desktop-window-controls .desktop-window-close:hover {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+/* ========================================================================= */
+/* Main Content Workspace                                                    */
+/* ========================================================================= */
+.desktop-workspace {
+  flex: 1;
+  height: var(--app-viewport-height);
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+.desktop-shell .app-shell > .sidebar {
+  top: var(--desktop-titlebar-height, 32px);
+  bottom: var(--desktop-footer-height, 28px);
+  height: var(--app-viewport-height, calc(100dvh - 60px));
+}
+
+.desktop-shell .main-shell {
+  min-height: var(--app-viewport-height, calc(100dvh - 60px));
+}
+
+.desktop-shell .app-pos-footer {
+  display: none;
+}
+
+/* ========================================================================= */
+/* Thin & Sleek Footer                                                       */
+/* ========================================================================= */
+.desktop-footer {
+  position: relative;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 var(--desktop-footer-height);
+  height: var(--desktop-footer-height);
+  gap: 12px;
+  padding: 0 16px;
+  border-top: 1px solid #e2e8f0;
+  color: #64748b;
+  background: #ffffff;
+  font-size: 11px;
+  user-select: none;
+}
+
+.desktop-footer-product {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #334155;
+  font-weight: 600;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.desktop-footer-dot {
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 50%;
+  background: #5E0CF3;
+  box-shadow: 0 0 6px rgba(94, 12, 243, 0.45);
+}
+
+.desktop-footer-center {
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.desktop-footer-agency {
+  color: #64748b;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.desktop-footer-agency strong {
+  margin-left: 4px;
+  color: #1e1b4b;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+
+/* ========================================================================= */
+/* Responsive Header & Footer                                                */
+/* ========================================================================= */
+@media (max-width: 768px) {
+  .desktop-titlebar-caption {
+    display: none;
+  }
+  .desktop-fullscreen-button span {
+    display: none;
+  }
+  .desktop-fullscreen-button {
+    padding: 0 10px;
+  }
+  .desktop-window-controls button {
+    width: 36px;
+  }
+  .desktop-footer-center {
+    display: none;
+  }
+  .desktop-footer {
+    padding: 0 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .desktop-titlebar-brand {
+    padding-left: 10px;
+    gap: 6px;
+  }
+  .desktop-brand-name {
+    font-size: 12px;
+  }
+  .desktop-window-controls button {
+    width: 32px;
+  }
+  .desktop-footer {
+    padding: 0 8px;
+    font-size: 9.5px;
+  }
+}
+
+@media print {
+  .desktop-titlebar,
+  .desktop-footer {
+    display: none !important;
+  }
+  .desktop-shell {
+    height: auto;
+    overflow: visible;
+  }
+  .desktop-workspace {
+    overflow: visible;
+  }
+}

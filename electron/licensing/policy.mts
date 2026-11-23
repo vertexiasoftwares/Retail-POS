@@ -7,6 +7,7 @@ const availableWhenLocked = new Set([
   'products:list', 'products:export-csv', 'sales:get-snapshot', 'sales:get-detail', 'sales:export-csv',
   'auth:status', 'auth:setup', 'auth:login', 'auth:logout', 'auth:select-branch', 'auth:list-users', 'auth:change-password',
   'licensing:status', 'licensing:activate', 'licensing:refresh',
+  'cloudLicense:status', 'cloudLicense:register', 'cloudLicense:activate', 'cloudLicense:refresh',
 ])
 // Closing an existing drawer records reconciliation; opening or moving cash stays locked.
 export function requiresTransactionLicense(channel: string) { return !availableWhenLocked.has(channel) }

@@ -1,0 +1,629 @@
+/* MedKit POS Design System Stylesheet */
+
+.medkit-page-container {
+  padding: 24px 28px;
+  max-width: 1600px;
+  margin: 0 auto;
+  font-family: var(--font-body, 'Plus Jakarta Sans', sans-serif);
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+/* Top Banner Header */
+.medkit-top-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #ffffff;
+  padding: 18px 24px;
+  border-radius: 18px;
+  border: 1px solid #e8eef5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.medkit-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.medkit-banner-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #7c39f5, #5E0CF3);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(94, 12, 243, 0.28);
+}
+
+.medkit-banner-titles h1 {
+  font-family: var(--font-heading, 'DM Sans', sans-serif);
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 3px 0;
+  line-height: 1.2;
+}
+
+.medkit-banner-titles p {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0;
+}
+
+.medkit-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Primary Button */
+.medkit-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #7A35F6, #5E0CF3);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(94, 12, 243, 0.24);
+}
+
+.medkit-btn-primary:hover {
+  background: #5009d4;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(94, 12, 243, 0.35);
+}
+
+.medkit-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.medkit-btn-secondary:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.medkit-btn-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #ffffff;
+  color: #5E0CF3;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid #5E0CF3;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.medkit-btn-outline:hover {
+  background: #f7f2ff;
+}
+
+/* 4 Stat Cards Row */
+.medkit-stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 1024px) {
+  .medkit-stats-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .medkit-stats-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.medkit-stat-card {
+  background: #ffffff;
+  padding: 18px 20px;
+  border-radius: 16px;
+  border: 1px solid #e8eef5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.medkit-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.04);
+}
+
+.medkit-stat-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.medkit-stat-badge.purple { background: #ede9fe; color: #7c3aed; }
+.medkit-stat-badge.green { background: #dcfce7; color: #16a34a; }
+.medkit-stat-badge.yellow { background: #fef3c7; color: #d97706; }
+.medkit-stat-badge.red { background: #fee2e2; color: #dc2626; }
+.medkit-stat-badge.blue { background: #dbeafe; color: #2563eb; }
+
+.medkit-stat-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.medkit-stat-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  margin-bottom: 4px;
+  text-transform: capitalize;
+}
+
+.medkit-stat-value {
+  font-family: var(--font-heading, 'DM Sans', sans-serif);
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
+  margin-bottom: 4px;
+}
+
+.medkit-stat-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.medkit-trend-up {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.medkit-trend-down {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+/* Tabs Navigation Row */
+.medkit-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 18px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+}
+
+.medkit-tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.medkit-tab-btn:hover {
+  color: #5E0CF3;
+}
+
+.medkit-tab-btn.active {
+  color: #5E0CF3;
+  border-bottom-color: #5E0CF3;
+}
+
+/* Filter Toolbar */
+.medkit-filters-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.medkit-search-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+}
+
+.medkit-search-input-wrap svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.medkit-search-input-wrap input {
+  width: 100%;
+  padding: 9px 12px 9px 36px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #1e293b;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+.medkit-search-input-wrap input:focus {
+  border-color: #5E0CF3;
+  box-shadow: 0 0 0 3px rgba(94, 12, 243, 0.1);
+}
+
+.medkit-select {
+  padding: 9px 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #334155;
+  outline: none;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.medkit-select:focus {
+  border-color: #5E0CF3;
+}
+
+.medkit-btn-clear {
+  padding: 9px 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.medkit-btn-clear:hover {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+/* Two Column Layout */
+.medkit-two-col-layout {
+  display: grid;
+  grid-template-columns: 1fr 390px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .medkit-two-col-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Card Container */
+.medkit-card {
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid #e8eef5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  overflow: hidden;
+}
+
+.medkit-card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.medkit-card-header h2,
+.medkit-card-header h3 {
+  font-family: var(--font-heading, 'DM Sans', sans-serif);
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.medkit-card-body {
+  padding: 20px;
+}
+
+/* Table Styling */
+.medkit-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.medkit-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.medkit-table th {
+  padding: 12px 14px;
+  background: #f8fafc;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.medkit-table td {
+  padding: 13px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+  vertical-align: middle;
+}
+
+.medkit-table tr:hover td {
+  background: #f8fafc;
+}
+
+.medkit-table tr.selected td {
+  background: #eff6ff;
+}
+
+/* Avatar Initials Circle */
+.medkit-avatar-initials {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  color: #ffffff;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+/* Status Pills */
+.medkit-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.medkit-status-pill.active {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.medkit-status-pill.inactive {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+/* Category Pills */
+.medkit-category-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.medkit-category-pill.utilities { background: #e0f2fe; color: #0284c7; }
+.medkit-category-pill.rent { background: #fee2e2; color: #b91c1c; }
+.medkit-category-pill.salaries { background: #fef3c7; color: #b45309; }
+.medkit-category-pill.maintenance { background: #f3e8ff; color: #7e22ce; }
+.medkit-category-pill.officesupplies { background: #ccfbf1; color: #0f766e; }
+.medkit-category-pill.transport { background: #ffedd5; color: #c2410c; }
+.medkit-category-pill.marketing { background: #ede9fe; color: #6d28d9; }
+.medkit-category-pill.default { background: #f1f5f9; color: #475569; }
+
+/* Role Pills */
+.medkit-role-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.medkit-role-pill.owner { background: #fee2e2; color: #b91c1c; }
+.medkit-role-pill.manager { background: #dbeafe; color: #1d4ed8; }
+.medkit-role-pill.cashier { background: #dcfce7; color: #15803d; }
+.medkit-role-pill.inventory { background: #f3e8ff; color: #7e22ce; }
+.medkit-role-pill.purchasing { background: #fef3c7; color: #b45309; }
+
+/* Pagination */
+.medkit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-top: 1px solid #f1f5f9;
+  font-size: 12.5px;
+  color: #64748b;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.medkit-pagination-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.medkit-page-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.medkit-page-btn:hover:not(:disabled) {
+  border-color: #5E0CF3;
+  color: #5E0CF3;
+}
+
+.medkit-page-btn.active {
+  background: #5E0CF3;
+  color: #ffffff;
+  border-color: #5E0CF3;
+  font-weight: 600;
+}
+
+.medkit-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Modals */
+.medkit-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.medkit-modal {
+  background: #ffffff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 520px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  animation: medkitModalFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes medkitModalFadeIn {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.medkit-modal-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.medkit-modal-header h2 {
+  font-family: var(--font-heading, 'DM Sans', sans-serif);
+  font-size: 17px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.medkit-modal-body {
+  padding: 24px;
+}
+
+.medkit-modal-footer {
+  padding: 16px 24px;
+  background: #f8fafc;
+  border-top: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Form Controls in Modal */
+.medkit-form-group {
+  margin-bottom: 16px;
+}
+
+.medkit-form-group label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+}
+
+.medkit-form-group input,
+.medkit-form-group select,
+.medkit-form-group textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #0f172a;
+  background: #ffffff;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+.medkit-form-group input:focus,
+.medkit-form-group select:focus,
+.medkit-form-group textarea:focus {
+  border-color: #5E0CF3;
+  box-shadow: 0 0 0 3px rgba(94, 12, 243, 0.1);
+}

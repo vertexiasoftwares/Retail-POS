@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "..",
+    "outDir": "../server-dist",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "sourceMap": true,
+    "declaration": false
+  },
+  "include": ["**/*.mts", "../electron/database/**/*.mts", "../src/types/desktop-api.ts"]
+}

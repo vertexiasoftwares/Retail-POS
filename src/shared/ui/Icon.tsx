@@ -1,13 +1,19 @@
 import type { ReactNode } from 'react'
 
-export type IconName = 'home' | 'store' | 'sale' | 'box' | 'inventory' | 'cart' | 'users' | 'supplier' | 'cash' | 'expense' | 'report' | 'settings' | 'user' | 'menu' | 'search' | 'bell' | 'chevron' | 'calendar' | 'clock' | 'chart' | 'bolt' | 'wallet' | 'plus' | 'arrow' | 'warning' | 'crown' | 'receipt' | 'check' | 'money' | 'lock'
+export type IconName = 'home' | 'store' | 'sale' | 'box' | 'inventory' | 'cart' | 'users' | 'supplier' | 'cash' | 'expense' | 'report' | 'settings' | 'user' | 'menu' | 'search' | 'bell' | 'chevron' | 'calendar' | 'clock' | 'chart' | 'bolt' | 'wallet' | 'plus' | 'arrow' | 'warning' | 'crown' | 'receipt' | 'check' | 'money' | 'lock' | 'unlock' | 'logout' | 'key' | 'shieldCheck' | 'eye' | 'eyeOff' | 'copy' | 'phone' | 'mail' | 'download' | 'refresh' | 'mapPin' | 'minus' | 'square' | 'close' | 'maximize' | 'minimize'
 const paths: Record<IconName, ReactNode> = {
+  minus: <path d="M5 12h14" />,
+  square: <rect width="16" height="16" x="4" y="4" rx="2" />,
+  close: <path d="M18 6 6 18M6 6l12 12" />,
+  maximize: <><path d="M15 3h6v6" /><path d="M9 21H3v-6" /><path d="M21 3l-7 7" /><path d="M3 21l7-7" /></>,
+  minimize: <><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="M14 10l7-7" /><path d="M10 14l-7 7" /></>,
+  mapPin: <><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></>,
   home: <path d="m3 10 9-7 9 7v10H14v-6h-4v6H3z" />,
-  store: <path d="M4 10v11h16V10M3 10l2-7h14l2 7M3 10q2 4 5 0 2 4 4 0 2 4 4 0 3 4 5 0M9 21v-7h6v7M6 3v-1h12v1" />,
+  store: <><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7" /><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4" /><path d="M2 7h20" /><path d="M22 7v3a2 2 0 0 1-2 2v0a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12v0a2 2 0 0 1-2-2V7" /></>,
   sale: <path d="M5 9h4l3-6 3 1-1 5h6l-2 12H8L5 18zM3 9h4v11H3z" />,
-  box: <path d="m3 7 9-4 9 4v11l-9 4-9-4zM3 7l9 5 9-5M12 12v10M7 5l9 5" />,
+  box: <><path d="m16.5 9.4-9-5.19M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.29 7 12 12 20.71 7" /><line x1="12" x2="12" y1="22" y2="12" /></>,
   inventory: <path d="M4 8h16v13H4zM3 5h18v3H3zM9 3h6M12 11v7M9 14h6" />,
-  cart: <><path d="M2 3h3l3 13h11l3-10H6" /><circle cx="9" cy="20" r="1" /><circle cx="18" cy="20" r="1" /></>,
+  cart: <><circle cx="8" cy="21" r="1" /><circle cx="19" cy="21" r="1" /><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" /></>,
   users: <><circle cx="9" cy="7" r="3" /><path d="M3 21v-4a6 6 0 0 1 12 0v4zM16 4a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 5v2" /></>,
   supplier: <><circle cx="15" cy="8" r="5" /><path d="M11 8h8M15 5v6M3 16l5-4 5 3 6-2 2 3-8 5H6l-3-3z" /></>,
   cash: <><rect x="3" y="7" width="18" height="14" rx="2" /><path d="M8 7V4h8v3" /><circle cx="12" cy="14" r="3" /><path d="M12 12v4" /></>,
@@ -32,6 +38,17 @@ const paths: Record<IconName, ReactNode> = {
   check: <path d="m5 12 4 4L19 6" />,
   money: <><circle cx="12" cy="12" r="9" /><path d="M15 8h-5a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H9M12 6v12" /></>,
   lock: <><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></>,
+  unlock: <><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0c0 .7-.1 1.3-.4 1.9M12 15v2" /></>,
+  logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></>,
+  key: <><path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" /><circle cx="16.5" cy="7.5" r=".5" fill="currentColor" /></>,
+  shieldCheck: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" /><path d="m9 12 2 2 4-4" /></>,
+  eye: <><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>,
+  eyeOff: <><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61M2 2l20 20" /></>,
+  copy: <><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></>,
+  phone: <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />,
+  mail: <><rect width="20" height="16" x="2" y="4" rx="2" /><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" /></>,
+  download: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />,
+  refresh: <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16M16 21h5v-5" />,
 }
 export function Icon({ name, size = 20, className = '' }: { name: IconName; size?: number; className?: string }) {
   return <svg className={`icon ${className}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>

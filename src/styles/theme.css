@@ -54,13 +54,13 @@
 }
 .brand-logo {
   transform: none;
-  width: 45px;
-  height: 45px;
-  flex-basis: 45px;
-  border: 1px solid #ffffff24;
-  border-radius: 11px;
-  background: #fdfcff;
-  box-shadow: 0 6px 16px #05010975;
+  width: 42px;
+  height: 42px;
+  flex-basis: 42px;
+  border: none;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none;
 }
 .menu-button,
 .notification-button {
@@ -165,4 +165,104 @@
 .catalog-actions button,
 .barcode-input button {
   color: #651ddb;
+}
+
+/* Stylish App Footer Bar */
+.app-pos-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 24px;
+  background: #17092c;
+  border-top: 1px solid rgba(109, 74, 255, 0.25);
+  color: #cbb9e8;
+  font-size: 12.5px;
+  font-family: inherit;
+  margin-top: auto;
+  z-index: 50;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.live-status-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 10px #10b981;
+  display: inline-block;
+}
+
+.footer-status-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  color: #e5def5;
+}
+
+.footer-shortcuts-center {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shortcut-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #bfaee3;
+}
+
+.shortcut-badge kbd {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 1.5px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffffff;
+  font-family: inherit;
+}
+
+.footer-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+}
+
+.branch-meta-badge {
+  color: #a491cf;
+}
+
+.footer-clock {
+  font-weight: 700;
+  color: #f7f4fd;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Global Zoom Floating Toast Pill */
+.global-zoom-toast-pill {
+  position: fixed;
+  bottom: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #211A3A;
+  border: 1.5px solid #6D4AFF;
+  color: #ffffff;
+  padding: 8px 24px;
+  border-radius: 30px;
+  font-size: 13.5px;
+  font-weight: 700;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  z-index: 99999;
+  pointer-events: none;
+  animation: zoomToastIn 0.15s ease-out;
+}
+
+@keyframes zoomToastIn {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }

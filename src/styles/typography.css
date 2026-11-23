@@ -1,0 +1,187 @@
+/* ========================================================================= */
+/* Vertexia Retail POS — Global Typography System                            */
+/* Headings, Page Titles, Card Titles, Dashboard Stats -> DM Sans            */
+/* Body, Sidebar, Tables, Buttons, Forms, Inputs, Labels -> Plus Jakarta Sans */
+/* ========================================================================= */
+
+:root {
+  --font-heading: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* 1. Global Default: Plus Jakarta Sans for All UI Base Elements */
+html,
+body,
+#root,
+button,
+input,
+select,
+textarea,
+p,
+span,
+label,
+a,
+li,
+td,
+th,
+div,
+section,
+aside,
+nav,
+header,
+footer,
+dialog,
+table,
+small,
+kbd,
+.nav-item,
+.sidebar,
+.top-navigation-tab,
+.session-bar,
+.footer-clock,
+.modal-content,
+.auth-inputs-stack,
+.form-field,
+.auth-btn-primary,
+.auth-btn-secondary,
+.register-switch-link,
+.activation-steps-bar,
+.support-contact-row,
+.whatsapp-support-btn {
+  font-family: var(--font-body);
+}
+
+/* 2. DM Sans: All Headings */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading) !important;
+}
+
+/* 3. DM Sans: Page Titles */
+.page-heading,
+.page-heading h1,
+.page-heading h2,
+.welcome-row h1,
+.products-title,
+.pos-title,
+.report-title,
+.section-heading h1,
+.section-heading h2,
+.section-heading h3,
+.panel-heading,
+.direct-section-title-row h1,
+.register-header h1,
+.form-direct-header h2,
+.brand-titles h2,
+.brand-text h1,
+.auth-card h1,
+.login-intro h1,
+.app-navigation-brand strong,
+.sidebar .brand strong,
+.sidebar-brand-row strong {
+  font-family: var(--font-heading) !important;
+}
+
+/* 4. DM Sans: Card Titles */
+.card-heading h2,
+.card-heading h3,
+.table-card h2,
+.table-card h3,
+.growth-card h2,
+.growth-card h3,
+.recent-activity h2,
+.recent-activity h3,
+.stat-card p,
+.card-title,
+.dashboard-card-title,
+.modal-header h2,
+.modal-header h3,
+.dialog-header h2,
+.dialog-header h3,
+.sheet-title,
+.stat-card-title,
+.pos-card-title,
+.direct-side-block h3,
+.branch-card strong,
+.sidebar-user-name {
+  font-family: var(--font-heading) !important;
+}
+
+/* 5. DM Sans: Dashboard Statistics & Key Financial Metrics */
+.stat-card > strong,
+.stat-card strong,
+.stat-foot b,
+.metric-value,
+.sales-amount,
+.total-amount,
+.stat-number,
+.stat-total,
+.stat-currency,
+.stat-big,
+.dashboard-stat,
+.kpi-value,
+.summary-metric,
+.sales-stat strong,
+.portfolio-total strong,
+.stat-paid strong,
+.stat-pending strong,
+.stat-expired strong,
+.stat-suspended strong,
+.stat-customers strong,
+.stat-metric,
+.big-number,
+.money-display,
+.total-display,
+.sales-overview .stat-card strong,
+.quick-action-text strong,
+.money-overview-item strong,
+.account-balance,
+.grand-total,
+.due-amount,
+.received-amount {
+  font-family: var(--font-heading) !important;
+}
+
+/* 6. Plus Jakarta Sans: Explicit Enforcement on All Forms, Inputs, Buttons & UI Controls */
+input,
+select,
+textarea,
+button,
+label,
+table,
+th,
+td,
+.input-with-icon-fixed input,
+.auth-btn-primary,
+.auth-btn-secondary,
+.nav-item span,
+.top-navigation-tab,
+.sidebar-user-role,
+.sidebar-branch-select,
+.activation-steps-bar li,
+.license-status-banner p,
+.license-status-banner small,
+.support-instruction,
+.support-contact-row span,
+.registered-store-name,
+.auth-eyebrow-pill,
+.form-field label,
+.form-field .field-hint {
+  font-family: var(--font-body);
+}
+
+/* 7. Monospace Exception for Keys, Barcodes & Registration Codes */
+.font-mono,
+code.registration-code,
+.license-key-input-field,
+.reg-id-display-box code,
+.barcode-text,
+code.mono,
+.device-id-code {
+  font-family: var(--font-mono) !important;
+}

@@ -138,7 +138,13 @@ test('changing the reviewed staged file prevents restore and changing a saved ba
 
 test('export rejects live database, journal files and hard link aliases', async t => {
   const state = await setup(t), record = await state.service.create()
-  const alias = join(state.directory, 'live-alias.sqlite'); linkSync(state.path, alias)
+  const alias = join(state.directory, 'live-alias.sqlite')
+  try {
+    linkSync(state.path, alias)
+  } catch (e) {
+    if (e?.code === 'EPERM') return t.skip('Hard links require elevation on Windows')
+    throw e
+  }
   const walAlias = join(state.directory, 'wal-alias.sqlite'); linkSync(state.path + '-wal', walAlias)
   for (const path of [state.path, state.path + '-wal', state.path + '-shm', state.path + '-journal', alias, walAlias, join(state.service.directory, 'copy.sqlite')]) await assert.rejects(state.service.export(record.id, path), /live database|external location/)
   await assert.rejects(state.service.preview(alias, state.ownerId), /live database/)
