@@ -676,7 +676,10 @@ export class VertexiaDatabase {
     const now = this.now().toISOString()
     this.connection.exec('BEGIN IMMEDIATE')
     try {
-      this.connection.prepare('DELETE FROM sale_return_items WHERE product_id=?').run(id)
+      this.connection.prepare('DELETE FROM stock_value_movements WHERE movement_id IN (SELECT id FROM stock_movements WHERE product_id=?)').run(id)
+      this.connection.prepare('DELETE FROM sale_item_costs WHERE sale_item_id IN (SELECT id FROM sale_items WHERE product_id=?)').run(id)
+      this.connection.prepare('DELETE FROM sale_return_items WHERE product_id=? OR sale_item_id IN (SELECT id FROM sale_items WHERE product_id=?)').run(id, id)
+      this.connection.prepare('DELETE FROM stock_transfer_items WHERE product_id=?').run(id)
       this.connection.prepare('DELETE FROM sale_items WHERE product_id=?').run(id)
       this.connection.prepare('DELETE FROM purchase_items WHERE product_id=?').run(id)
       this.connection.prepare('DELETE FROM stock_movements WHERE product_id=?').run(id)

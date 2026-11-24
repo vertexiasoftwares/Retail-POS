@@ -16,7 +16,7 @@ function AuthenticatedApp() {
     const allPageNames: PageName[] = [
       'Dashboard', 'POS', 'Sales', 'Products', 'Inventory',
       'Purchases', 'Customers', 'Suppliers', 'Cash & Shifts',
-      'Expenses', 'Staff', 'Reports', 'Settings', 'My Account'
+      'Expenses', 'Staff', 'Reports', 'Settings', 'My Account', 'Notifications'
     ]
     return allPageNames.find(p => canPage(p)) ?? 'My Account'
   }

@@ -9,7 +9,7 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 }
 export function isUserRole(value: unknown): value is UserRole { return typeof value === 'string' && Object.hasOwn(rolePermissions, value) }
 export function canAccessPage(page: string, permissions: readonly Permission[], allowedTabs?: readonly string[]): boolean {
-  if (page === 'My Account') return true
+  if (page === 'My Account' || page === 'Notifications') return true
   if (allowedTabs && Array.isArray(allowedTabs) && allowedTabs.length > 0) {
     return allowedTabs.includes(page)
   }

@@ -5,7 +5,10 @@ import { accountPaymentMethods, localBusinessDate, moneyPaisa as money, parseMon
 import { useDesktopAction, useDesktopQuery } from '../../shared/hooks/useDesktopQuery'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { DateRangeFilter } from '../../shared/ui/DateRangeFilter'
 import { Icon } from '../../shared/ui/Icon'
+import { exportToExcel } from '../../shared/utils/exportUtils'
 import type { ExpenseRecord } from '../../types/accounts'
 import type { RetailPaymentMethod } from '../../types/desktop-api'
 
@@ -117,30 +120,31 @@ export default function ExpensesPage(props: PageProps) {
     <PageShell
       {...props}
       activePage="Expenses"
-      header={menu => (
-        <header className="desktop-page-header flex items-center justify-between px-7 py-3.5 bg-white border-b border-slate-200">
-          <div className="flex items-center gap-3">
+      header={() => (
+        <TopNavHeader
+          title="Store Expenses"
+          subtitle="Track bills, petty cash and operational expenses"
+          onNavigate={props.onNavigate}
+          extraRight={
             <button
-              aria-label="Toggle sidebar"
-              onClick={menu}
-              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
-            >
-              <Icon name="menu" size={20} />
-            </button>
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Retail Management / Expenses
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
+              type="button"
               disabled={action.busy || list.loading}
               onClick={notifyRetailDataChanged}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #dce4ef',
+                background: '#f8fafc',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#475569',
+                cursor: 'pointer',
+              }}
             >
               Refresh data
             </button>
-          </div>
-        </header>
+          }
+        />
       )}
     >
       <div className="medkit-page-container">
@@ -156,6 +160,7 @@ export default function ExpensesPage(props: PageProps) {
             </div>
           </div>
           <div className="medkit-banner-actions">
+            <DateRangeFilter />
             {can('expenses.manage') && (
               <button
                 type="button"
@@ -529,10 +534,32 @@ export default function ExpensesPage(props: PageProps) {
                   </button>
                   <button
                     type="button"
+                    onClick={() => {
+                      const records = list.data?.records ?? []
+                      exportToExcel({
+                        filename: `expenses-report-${new Date().toISOString().slice(0, 10)}.xls`,
+                        title: 'Expenses Ledger Report',
+                        subtitle: `Total Expenses: ${records.length}`,
+                        headers: ['Expense #', 'Date', 'Category', 'Description', 'Amount (Rs)', 'Payment Method', 'Status', 'Reference'],
+                        rows: records.map((exp: ExpenseRecord) => [
+                          exp.number,
+                          exp.businessDate,
+                          exp.category,
+                          exp.description,
+                          (exp.amountPaisa / 100).toFixed(2),
+                          exp.method,
+                          exp.isReversed ? 'Reversed' : 'Active',
+                          exp.reference || '',
+                        ]),
+                      })
+                    }}
                     className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 text-left text-xs font-semibold text-slate-700 transition-colors"
                   >
-                    <Icon name="download" size={16} className="text-slate-400" />
-                    <span>Export Expenses</span>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2"/>
+                      <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+                    </svg>
+                    <span>Export Expenses (Excel)</span>
                   </button>
                   <button
                     type="button"

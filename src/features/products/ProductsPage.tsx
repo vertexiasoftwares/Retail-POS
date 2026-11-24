@@ -1,5 +1,3 @@
-import { useAuth } from '../../app/auth/useAuth'
-import { BusinessName, BranchName, UserName, UserRoleName } from '../../shared/layout/SessionIdentity'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { motion } from 'framer-motion'
 import JsBarcode from 'jsbarcode'
@@ -9,6 +7,9 @@ import { PosProductVisual } from '../../shared/ui/ProductVisual'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import type { ProductDraft, ProductRecord } from './products.types'
 import { useProductsCatalog, type ProductsController } from './useProductsCatalog'
+
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { exportToExcel } from '../../shared/utils/exportUtils'
 
 const emptyDraft: ProductDraft = {
   name: '',
@@ -28,64 +29,13 @@ const emptyDraft: ProductDraft = {
 }
 const money = (value: number) => value.toLocaleString('en-PK', { maximumFractionDigits: 2 })
 
-function ProductsHeader({
-  onMenu,
-  search,
-  onSearch,
-}: {
-  onMenu: () => void
-  search: string
-  onSearch: (value: string) => void
-}) {
+function ProductsHeader({ onNavigate }: { onNavigate?: (page: string) => void }) {
   return (
-    <header className="topbar products-topbar">
-      <button className="icon-button menu-button" aria-label="Toggle sidebar" onClick={onMenu}>
-        <Icon name="menu" size={23} />
-      </button>
-      <div className="search-field products-global-search">
-        <Icon name="search" size={19} />
-        <input
-          value={search}
-          onChange={event => onSearch(event.target.value)}
-          aria-label="Search products"
-          placeholder="Search products by name, barcode, SKU..."
-        />
-        <kbd>Ctrl + K</kbd>
-      </div>
-      <div className="topbar-right">
-        <button className="icon-button notification-button" aria-label="Product notifications">
-          <Icon name="bell" size={24} />
-        </button>
-        <button className="store-switcher">
-          <span className="store-avatar">
-            <Icon name="store" size={22} />
-          </span>
-          <span>
-            <strong>
-              <BusinessName />
-            </strong>
-            <small>
-              <BranchName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-        <button className="profile-button">
-          <span className="avatar">
-            <Icon name="user" size={26} />
-          </span>
-          <span>
-            <strong>
-              <UserName />
-            </strong>
-            <small>
-              <UserRoleName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-      </div>
-    </header>
+    <TopNavHeader
+      title="Products Catalog"
+      subtitle="Manage product catalog, pricing and stock"
+      onNavigate={onNavigate}
+    />
   )
 }
 
@@ -1120,7 +1070,6 @@ function BarcodeSheet({ products, onClose }: { products: ProductRecord[]; onClos
 }
 
 function ProductsScreen({ controller }: { controller: ProductsController }) {
-  const { can } = useAuth()
   const [editing, setEditing] = useState<ProductRecord | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [view, setView] = useState<'list' | 'grid'>('list')
@@ -1144,12 +1093,13 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
     setEditing(product)
     setPanelOpen(true)
   }
+
   const print = () => {
     const products = selected.size
       ? controller.products.filter(product => selected.has(product.id))
-      : controller.products.filter(product => product.barcode)
+      : controller.products
     if (!products.length) {
-      controller.setError('Select at least one product with a barcode.')
+      controller.setError('No products available to print barcodes.')
       return
     }
     setBarcodes(products)
@@ -1190,16 +1140,66 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
                   event.currentTarget.value = ''
                 }}
               />
-              <button onClick={() => importRef.current?.click()} disabled={controller.busy}>
-                <Icon name="receipt" size={15} /> &nbsp; Import Products
+              <button
+                type="button"
+                onClick={() => importRef.current?.click()}
+                disabled={controller.busy}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <Icon name="receipt" size={15} /> Import Products
               </button>
               <button
-                onClick={() => void controller.exportCsv()}
-                disabled={controller.busy || !can('data.export')}
+                type="button"
+                onClick={() => exportToExcel({
+                  filename: `products-catalog-${new Date().toISOString().slice(0, 10)}.xls`,
+                  title: 'Products Catalog Report',
+                  subtitle: `Total Products: ${controller.products.length}`,
+                  headers: ['Product Name', 'SKU', 'Barcode', 'Category', 'Brand', 'Unit', 'Stock Qty', 'Minimum Stock', 'Purchase Price (Rs)', 'Selling Price (Rs)', 'MRP (Rs)', 'Status'],
+                  rows: controller.products.map(p => [
+                    p.name || '',
+                    p.sku || '',
+                    p.barcode || '',
+                    p.category || '',
+                    p.brand || '',
+                    p.unit || '',
+                    p.stock,
+                    p.minimumStock,
+                    p.purchasePriceRupees.toFixed(2),
+                    p.sellingPriceRupees.toFixed(2),
+                    p.mrpRupees.toFixed(2),
+                    p.status,
+                  ]),
+                })}
+                disabled={controller.busy}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  height: '38px',
+                  padding: '0 13px',
+                  border: '1px solid #dce4ef',
+                  borderRadius: '8px',
+                  background: '#ffffff',
+                  color: '#1e293b',
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  cursor: controller.busy ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+                }}
               >
-                <Icon name="download" size={15} /> &nbsp; Export Products
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/>
+                  <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+                </svg>
+                <span>Export Excel</span>
               </button>
-              <button onClick={print}>▥ &nbsp; Print Barcode</button>
+              <button
+                type="button"
+                onClick={print}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <Icon name="receipt" size={15} /> Print Barcode
+              </button>
               <button className="primary" onClick={openAdd} style={{ color: '#ffffff' }}>
                 <Icon name="plus" size={17} />
                 <span style={{ color: '#ffffff' }}>Add Product</span>
@@ -1372,9 +1372,7 @@ export default function ProductsPage(props: PageProps) {
       {...props}
       activePage="Products"
       className="products-app"
-      header={onMenu => (
-        <ProductsHeader onMenu={onMenu} search={controller.search} onSearch={controller.setSearch} />
-      )}
+      header={() => <ProductsHeader onNavigate={props.onNavigate} />}
     >
       <ProductsScreen controller={controller} />
     </PageShell>

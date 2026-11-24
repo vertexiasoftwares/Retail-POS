@@ -3,7 +3,9 @@ import { useAuth } from '../../app/auth/useAuth'
 import { localBusinessDate, moneyPaisa as money } from '../../shared/account-format'
 import { useDesktopAction, useDesktopQuery } from '../../shared/hooks/useDesktopQuery'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
 import { Icon } from '../../shared/ui/Icon'
+import { ExportDropdown } from '../../shared/ui/ExportDropdown'
 import { notifyRetailDataChanged } from '../../services/retail-events'
 import type { ReportSection } from '../../types/reports'
 
@@ -61,7 +63,6 @@ export default function ReportsPage(props: PageProps) {
   const [page, setPage] = useState(1)
 
   const section = tabToSection[activeTab] || 'overview'
-  const query = { branchId, dateFrom, dateTo, section, allBranches, page, pageSize: 25 }
 
   const result = useDesktopQuery(
     useCallback(
@@ -93,30 +94,31 @@ export default function ReportsPage(props: PageProps) {
     <PageShell
       {...props}
       activePage="Reports"
-      header={menu => (
-        <header className="desktop-page-header flex items-center justify-between px-7 py-3.5 bg-white border-b border-slate-200">
-          <div className="flex items-center gap-3">
+      header={() => (
+        <TopNavHeader
+          title="Reports & Analytics"
+          subtitle="Financial summaries, P&L, sales and inventory audit"
+          onNavigate={props.onNavigate}
+          extraRight={
             <button
-              aria-label="Toggle sidebar"
-              onClick={menu}
-              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
-            >
-              <Icon name="menu" size={20} />
-            </button>
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Retail Management / Reports
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
+              type="button"
               disabled={result.loading}
               onClick={notifyRetailDataChanged}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #dce4ef',
+                background: '#f8fafc',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#475569',
+                cursor: 'pointer',
+              }}
             >
-              Refresh data
+              Refresh
             </button>
-          </div>
-        </header>
+          }
+        />
       )}
     >
       <div className="medkit-page-container">
@@ -162,22 +164,26 @@ export default function ReportsPage(props: PageProps) {
             </select>
 
             {/* Export Report Dropdown */}
-            {can('data.export') && (
-              <button
-                type="button"
+            {can('data.export') && data?.table && (
+              <ExportDropdown
+                label="Export Report"
                 disabled={!data || result.loading || action.busy}
-                onClick={() =>
-                  void action.run(async () => {
-                    const exported = await window.vertexia!.reports.exportCsv(query)
-                    if (!exported.canceled) {
-                      action.setNotice('Full report saved: ' + exported.path)
-                    }
-                  })
-                }
-                className="medkit-btn-primary"
-              >
-                <span>Export Report ▾</span>
-              </button>
+                data={() => ({
+                  filename: `${activeTab.toLowerCase()}-report-${dateFrom}-to-${dateTo}.xls`,
+                  title: `${data.businessName} - ${activeTab} Report`,
+                  subtitle: `Branch: ${data.branchNames.join(', ')} | Period: ${dateFrom} to ${dateTo}`,
+                  headers: data.table.columns.map(c => c.label),
+                  rows: data.table.rows.map(row =>
+                    data.table.columns.map(c => {
+                      const val = row[c.key]
+                      if (c.kind === 'money' && typeof val === 'number') {
+                        return (val / 100).toFixed(2)
+                      }
+                      return val ?? ''
+                    })
+                  ),
+                })}
+              />
             )}
           </div>
         </div>

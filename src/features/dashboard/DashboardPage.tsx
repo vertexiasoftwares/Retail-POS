@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Icon, type IconName } from '../../shared/ui/Icon'
 import { ProductThumb } from '../../shared/ui/ProductThumb'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
-import type { DashboardChartPeriod, DashboardChartPoint, DashboardDateRange, DashboardSnapshot, GlobalSearchResult } from '../../types/desktop-api'
+import type { DashboardChartPeriod, DashboardChartPoint, DashboardDateRange, DashboardSnapshot } from '../../types/desktop-api'
 import { useDashboardData } from './useDashboardData'
 
 const money = (paisa: number) => `Rs ${(paisa / 100).toLocaleString('en-PK',{ maximumFractionDigits:0 })}`
@@ -79,29 +79,16 @@ function GrowthCard({ onNavigate }: { onNavigate:(page:string)=>void }) {
   return <section className="growth-card"><div><h2>Grow Your Business</h2><p>Manage your store efficiently with<br />Vertexia Retail POS</p><div className="benefits">{['Better Stock Control','Track Sales & Profit','Manage Customers','Multi-Store Support'].map(item => <span key={item}><Icon name="check" size={14} />{item}</span>)}</div><button className="reports-button" onClick={() => onNavigate('Reports')}>Explore Reports <Icon name="arrow" size={14} /></button></div><StoreIllustration /></section>
 }
 
-function DashboardHeader({ onMenu,data,branchId,onBranch,onNavigate }: { onMenu:()=>void; data:DashboardSnapshot | null; branchId:string; onBranch:(id:string)=>void; onNavigate:(page:string)=>void }) {
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [search,setSearch] = useState('')
-  const [results,setResults] = useState<GlobalSearchResult[]>([])
-  const [searching,setSearching] = useState(false)
-  const [showNotifications,setShowNotifications] = useState(false)
-  useEffect(() => {
-    const shortcut = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); inputRef.current?.focus() } if (event.key === 'Escape') { setSearch('');setResults([]);setSearching(false);setShowNotifications(false) } }
-    window.addEventListener('keydown',shortcut)
-    return () => window.removeEventListener('keydown',shortcut)
-  },[])
-  useEffect(() => {
-    if (!window.vertexia || search.trim().length < 2) return
-    let active = true
-    const timer = window.setTimeout(async () => {
-      try { const found = await window.vertexia!.dashboard.search(search,branchId); if (active) setResults(found) }
-      catch { if (active) setResults([]) }
-      finally { if (active) setSearching(false) }
-    },180)
-    return () => { active=false;window.clearTimeout(timer) }
-  },[search,branchId])
-  const selectedBranch = data?.branches.find(branch => branch.id === branchId) ?? data?.branches[0]
-  return <header className="topbar dashboard-topbar"><button className="icon-button menu-button" aria-label="Toggle sidebar" onClick={onMenu}><Icon name="menu" size={23} /></button><div className="search-field dashboard-search"><Icon name="search" size={19} /><input ref={inputRef} value={search} onChange={event => { const value=event.target.value;setSearch(value);setResults([]);setSearching(value.trim().length>=2) }} aria-label="Search products, customers, invoices and suppliers" placeholder="Search products, customers, invoices, suppliers..." /><kbd>Ctrl K</kbd>{search.trim().length >= 2 && <div className="dashboard-search-results">{searching && <p>Searching…</p>}{!searching && !results.length && <p>No matching records.</p>}{results.map(result => <button key={`${result.type}-${result.id}`} onClick={() => { setSearch('');setResults([]);onNavigate(result.targetPage) }}><span>{result.type}</span><strong>{result.title}</strong><small>{result.subtitle}</small></button>)}</div>}</div><div className="topbar-right"><div className="dashboard-notifications"><button className="icon-button notification-button" aria-label={`${data?.unreadNotifications ?? 0} stock alerts`} onClick={() => setShowNotifications(value => !value)}><Icon name="bell" size={24} />{Boolean(data?.unreadNotifications) && <span>{Math.min(data!.unreadNotifications,99)}</span>}</button>{showNotifications && <div className="dashboard-notification-menu"><strong>Stock Alerts</strong>{data?.lowProducts.map(product => <button key={product.id} onClick={() => onNavigate('Inventory')}><ProductThumb kind={product.kind} /><span>{product.name}<small>{quantity(product.quantityMilli)} remaining</small></span></button>)}{!data?.lowProducts.length && <p>No stock alerts.</p>}</div>}</div><label className="store-switcher dashboard-branch-select"><span className="store-avatar"><Icon name="store" size={22} /></span><span><strong>{selectedBranch?.name ?? 'Noor Mart'}</strong><small>{selectedBranch?.subtitle ?? 'Main Branch'}</small></span><select value={branchId} onChange={event => onBranch(event.target.value)} aria-label="Select branch">{data?.branches.map(branch => <option value={branch.id} key={branch.id}>{branch.name} — {branch.subtitle}</option>)}</select><Icon name="chevron" size={16} /></label><button className="profile-button" onClick={() => onNavigate('My Account')}><span className="avatar"><Icon name="user" size={26} /></span><span><strong>{data?.userName ?? 'Riyaz Ahmed'}</strong><small>{data?.userRole ?? 'Owner'}</small></span><Icon name="chevron" size={16} /></button></div></header>
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+
+function DashboardHeader({ onNavigate }: { onNavigate?: (page: string) => void }) {
+  return (
+    <TopNavHeader
+      title="Store Dashboard"
+      subtitle="Real-time sales, inventory status and profit tracking"
+      onNavigate={onNavigate}
+    />
+  )
 }
 
 function DashboardScreen({ data,dateRange,onDateRange,chartPeriod,onChartPeriod,onNavigate }: { data:DashboardSnapshot; dateRange:DashboardDateRange; onDateRange:(range:DashboardDateRange)=>void; chartPeriod:DashboardChartPeriod; onChartPeriod:(period:DashboardChartPeriod)=>void; onNavigate:(page:string)=>void }) {
@@ -112,6 +99,6 @@ function DashboardScreen({ data,dateRange,onDateRange,chartPeriod,onChartPeriod,
 
 export default function DashboardPage(props: PageProps) {
   const dashboard = useDashboardData()
-  const header = (onMenu:()=>void) => <DashboardHeader onMenu={onMenu} data={dashboard.snapshot} branchId={dashboard.branchId} onBranch={dashboard.setBranchId} onNavigate={props.onNavigate} />
+  const header = () => <DashboardHeader onNavigate={props.onNavigate} />
   return <PageShell {...props} activePage="Dashboard" header={header}>{dashboard.loading && !dashboard.snapshot ? <main className="dashboard dashboard-state"><section className="card"><span className="dashboard-spinner" /><h1>Loading Dashboard</h1><p>Reading verified figures from the local Vertexia database…</p></section></main> : dashboard.error || !dashboard.snapshot ? <main className="dashboard dashboard-state"><section className="card error"><Icon name="warning" size={28} /><h1>Dashboard unavailable</h1><p>{dashboard.error}</p><button onClick={() => void dashboard.refresh()}>Retry</button></section></main> : <DashboardScreen data={dashboard.snapshot} dateRange={dashboard.dateRange} onDateRange={dashboard.setDateRange} chartPeriod={dashboard.chartPeriod} onChartPeriod={dashboard.setChartPeriod} onNavigate={props.onNavigate} />}</PageShell>
 }

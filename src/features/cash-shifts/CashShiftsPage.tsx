@@ -3,6 +3,8 @@ import { useAuth } from '../../app/auth/useAuth'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { DateRangeFilter } from '../../shared/ui/DateRangeFilter'
 import { Icon } from '../../shared/ui/Icon'
 import type { CashSnapshot } from '../../types/recovery'
 
@@ -237,30 +239,31 @@ export default function CashShiftsPage(props: PageProps) {
     <PageShell
       {...props}
       activePage="Cash & Shifts"
-      header={menu => (
-        <header className="desktop-page-header flex items-center justify-between px-7 py-3.5 bg-white border-b border-slate-200">
-          <div className="flex items-center gap-3">
+      header={() => (
+        <TopNavHeader
+          title="Cash & Shifts"
+          subtitle="Cash drawers, shifts and cash transactions"
+          onNavigate={props.onNavigate}
+          extraRight={
             <button
-              aria-label="Toggle sidebar"
-              onClick={menu}
-              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
-            >
-              <Icon name="menu" size={20} />
-            </button>
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Retail Management / Cash & Shifts
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
+              type="button"
               disabled={busy}
               onClick={() => void run(refresh)}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #dce4ef',
+                background: '#f8fafc',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#475569',
+                cursor: 'pointer',
+              }}
             >
-              Refresh data
+              Refresh
             </button>
-          </div>
-        </header>
+          }
+        />
       )}
     >
       <div className="medkit-page-container">
@@ -276,6 +279,7 @@ export default function CashShiftsPage(props: PageProps) {
             </div>
           </div>
           <div className="medkit-banner-actions">
+            <DateRangeFilter />
             {!shift ? (
               <button
                 type="button"

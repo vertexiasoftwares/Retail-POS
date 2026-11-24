@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
-import { Icon } from '../../shared/ui/Icon'
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
 import type { BackupStatus, BackupSummary } from '../../types/recovery'
 import '../../styles/recovery.css'
 
@@ -17,7 +17,7 @@ export default function SettingsPage(props: PageProps) {
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Backup operation failed.') }
     finally { setBusy(false) }
   }
-  return <PageShell {...props} activePage="Settings" className="settings-page" header={menu => <header className="recovery-header"><button aria-label="Toggle sidebar" onClick={menu}><Icon name="menu" /></button><h1>Settings</h1><button disabled={busy} onClick={() => void run(refresh)}>Refresh</button></header>}><main className="recovery-content">
+  return <PageShell {...props} activePage="Settings" className="settings-page" header={() => <TopNavHeader title="Settings & Backup" subtitle="System recovery, data protection and audit logs" onNavigate={props.onNavigate} />}><main className="recovery-content">
     <h2>Backup & restore</h2><p>Owner access only. Backups include all branches, stock, sales, purchases, cash shifts and user accounts.</p>
     {error && <p className="recovery-error" role="alert">{error}</p>}{notice && <p className="recovery-notice" role="status">{notice}</p>}
     <section className="recovery-card"><h2>Protect your data</h2><p>A local automatic backup is created once a day while the desktop app runs. Save a copy to another drive for protection against disk failure.</p><p>Backup files are unencrypted and contain business records and password hashes. Store them in a private location. Cloud backup is pending.</p><div className="recovery-actions"><button className="recovery-primary" disabled={busy || status?.busy} onClick={() => void run(async () => { const record = await window.vertexia!.backup.create(); setNotice('Backup created: ' + record.fileName) })}>Create backup</button><button disabled={busy || status?.busy} onClick={() => void run(async () => { if (preview) await window.vertexia!.backup.cancelRestore(preview.token); setPreview(null); const result = await window.vertexia!.backup.previewRestore(); if (!result.canceled && result.summary) { setPreview(result.summary); setBackupOwnerUsername(result.summary.ownerUsernames[0] ?? ''); setBackupOwnerPassword(''); setCurrentPassword(''); setConfirmation(''); setAllowDifferentInstallation(false) } })}>Select backup to restore</button></div><small className="recovery-path">Local folder: {status?.directory ?? 'Loading...'}</small>{status?.lastAutomaticError && <p className="recovery-error">Automatic backup failed: {status.lastAutomaticError}</p>}</section>

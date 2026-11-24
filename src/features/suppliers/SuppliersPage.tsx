@@ -1,4 +1,3 @@
-import { BusinessName, BranchName, UserName, UserRoleName } from '../../shared/layout/SessionIdentity'
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Icon, type IconName } from '../../shared/ui/Icon'
@@ -7,6 +6,7 @@ import { useRetailData } from '../../app/data/useRetailData'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { RetailDataStatus } from '../../shared/ui/RetailDataStatus'
+import { exportToExcel } from '../../shared/utils/exportUtils'
 import type { PurchaseRecord } from '../purchases/purchases.types'
 import type { SupplierLedgerEntry, SupplierPaymentMethod, SupplierPaymentRecord, SupplierRecord } from './suppliers.types'
 
@@ -28,52 +28,15 @@ const initials = (name: string) =>
     .join('')
     .toUpperCase()
 
-function SuppliersHeader({ onMenu }: { onMenu: () => void }) {
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+
+function SuppliersHeader({ onNavigate }: { onNavigate?: (page: string) => void }) {
   return (
-    <header className="topbar customers-topbar suppliers-topbar">
-      <button className="icon-button menu-button" aria-label="Toggle sidebar" onClick={onMenu}>
-        <Icon name="menu" size={23} />
-      </button>
-      <div className="search-field customers-global-search">
-        <Icon name="search" size={19} />
-        <input aria-label="Search suppliers" placeholder="Search suppliers by name, phone, CNIC, city..." />
-        <kbd>Ctrl + K</kbd>
-      </div>
-      <div className="topbar-right">
-        <button className="icon-button notification-button" aria-label="Notifications, 2 unread">
-          <Icon name="bell" size={24} />
-          <span>2</span>
-        </button>
-        <button className="store-switcher">
-          <span className="store-avatar">
-            <Icon name="store" size={22} />
-          </span>
-          <span>
-            <strong>
-              <BusinessName />
-            </strong>
-            <small>
-              <BranchName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-        <button className="profile-button">
-          <span className="avatar">
-            <Icon name="user" size={26} />
-          </span>
-          <span>
-            <strong>
-              <UserName />
-            </strong>
-            <small>
-              <UserRoleName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-      </div>
-    </header>
+    <TopNavHeader
+      title="Supplier Management"
+      subtitle="Manage supplier records, purchases, payments and balances"
+      onNavigate={onNavigate}
+    />
   )
 }
 
@@ -158,6 +121,46 @@ function SuppliersTable({
             <Icon name="chevron" size={14} />
           </button>
         ))}
+        <button
+          type="button"
+          onClick={() => exportToExcel({
+            filename: `suppliers-report-${new Date().toISOString().slice(0, 10)}.xls`,
+            title: 'Suppliers & Payables Report',
+            subtitle: `Total Suppliers: ${filtered.length}`,
+            headers: ['Supplier Name', 'Contact Person', 'Phone', 'City', 'Total Purchases (Rs)', 'Balance Due (Rs)', 'Status'],
+            rows: filtered.map(s => [
+              s.name,
+              s.contactPerson || '',
+              s.phone || '',
+              s.city || '',
+              s.totalPurchasesRupees.toFixed(2),
+              s.outstandingRupees.toFixed(2),
+              s.status,
+            ]),
+          })}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: '38px',
+            padding: '0 13px',
+            border: '1px solid #dce4ef',
+            borderRadius: '8px',
+            background: '#ffffff',
+            color: '#1e293b',
+            fontSize: '12.5px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+            marginLeft: 'auto',
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+          </svg>
+          <span>Export Excel</span>
+        </button>
         <button className="clear" onClick={() => setSearch('')}>
           Clear
         </button>
@@ -1098,7 +1101,7 @@ export default function SuppliersPage(props: PageProps) {
       {...props}
       activePage="Suppliers"
       className="customers-app suppliers-app"
-      header={onMenu => <SuppliersHeader onMenu={onMenu} />}
+      header={() => <SuppliersHeader onNavigate={props.onNavigate} />}
     >
       <SuppliersScreen onNavigate={props.onNavigate} />
     </PageShell>

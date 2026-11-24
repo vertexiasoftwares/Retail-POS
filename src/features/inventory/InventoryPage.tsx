@@ -1,4 +1,3 @@
-import { BusinessName, BranchName, UserName, UserRoleName } from '../../shared/layout/SessionIdentity'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Icon, type IconName } from '../../shared/ui/Icon'
@@ -12,62 +11,26 @@ import type { InventoryMovementRecord, ProductRecord } from '../products/product
 import { useAuth } from '../../app/auth/useAuth'
 import { useDesktopQuery } from '../../shared/hooks/useDesktopQuery'
 import { notifyRetailDataChanged } from '../../services/retail-events'
+import { exportToExcel, exportToPdf } from '../../shared/utils/exportUtils'
+
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
 
 const money = (value: number) => value.toLocaleString('en-PK')
 const categoryColors = ['#287be5', '#ee9418', '#17ad86', '#7653ec', '#e84b6d', '#15aa91']
 
-function InventoryHeader({ onMenu }: { onMenu: () => void }) {
+function InventoryHeader({ onNavigate }: { onNavigate?: (page: string) => void }) {
   return (
-    <header className="topbar inventory-topbar">
-      <button className="icon-button menu-button" aria-label="Toggle sidebar" onClick={onMenu}>
-        <Icon name="menu" size={23} />
-      </button>
-      <div className="search-field inventory-global-search">
-        <Icon name="search" size={19} />
-        <input aria-label="Search" placeholder="Search products, customers, invoices, suppliers..." />
-        <kbd>Ctrl + K</kbd>
-      </div>
-      <div className="topbar-right">
-        <button className="icon-button notification-button" aria-label="Notifications, 2 unread">
-          <Icon name="bell" size={24} />
-          <span>2</span>
-        </button>
-        <button className="store-switcher">
-          <span className="store-avatar">
-            <Icon name="store" size={22} />
-          </span>
-          <span>
-            <strong>
-              <BusinessName />
-            </strong>
-            <small>
-              <BranchName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-        <button className="profile-button">
-          <span className="avatar">
-            <Icon name="user" size={26} />
-          </span>
-          <span>
-            <strong>
-              <UserName />
-            </strong>
-            <small>
-              <UserRoleName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-      </div>
-    </header>
+    <TopNavHeader
+      title="Inventory Management"
+      subtitle="Stock levels, valuation and movements"
+      onNavigate={onNavigate}
+    />
   )
 }
 
 function InventoryStats({
   products,
-  movements,
+  movements: _movements,
 }: {
   products: ProductRecord[]
   movements: InventoryMovementRecord[]
@@ -78,9 +41,7 @@ function InventoryStats({
   const totalValue = valuation.data ? valuation.data.valuePaisa / 100 : null
   const low = products.filter(product => product.stock > 0 && product.stock <= product.minimumStock).length
   const out = products.filter(product => product.stock <= 0).length
-  const stockIn = movements
-    .filter(movement => movement.quantityDelta > 0)
-    .reduce((total, movement) => total + movement.quantityDelta, 0)
+  const totalStockUnits = products.reduce((sum, p) => sum + (p.stock > 0 ? p.stock : 0), 0)
   const cards: [IconName, string, string, string, string, string][] = [
     [
       'box',
@@ -92,7 +53,7 @@ function InventoryStats({
     ],
     ['warning', 'Low Stock Items', String(low), 'View Items', '→', 'amber'],
     ['users', 'Out of Stock Items', String(out), 'View Items', '→', 'rose'],
-    ['sale', 'Stock In', `${money(stockIn)} units`, 'From movements', '', 'blue'],
+    ['inventory', 'Total Products', `${products.length} ${products.length === 1 ? 'Product' : 'Products'}`, `${totalStockUnits} total units in stock`, '', 'blue'],
   ]
   return (
     <div className="inventory-stats">
@@ -114,55 +75,6 @@ function InventoryStats({
   )
 }
 
-function exportProductsToCsv(products: ProductRecord[], filename = 'inventory-products.csv') {
-  const headers = ['Name', 'SKU', 'Barcode', 'Category', 'Brand', 'Unit', 'Stock', 'Min Stock', 'Purchase Price (Rs)', 'Sale Price (Rs)', 'Status']
-  const rows = products.map(p => [
-    `"${(p.name || '').replace(/"/g, '""')}"`,
-    `"${p.sku || ''}"`,
-    `"${p.barcode || ''}"`,
-    `"${(p.category || '').replace(/"/g, '""')}"`,
-    `"${(p.brand || '').replace(/"/g, '""')}"`,
-    `"${p.unit || ''}"`,
-    p.stock,
-    p.minimumStock,
-    p.purchasePriceRupees.toFixed(2),
-    p.sellingPriceRupees.toFixed(2),
-    p.status
-  ])
-  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.setAttribute('href', url)
-  link.setAttribute('download', filename)
-  link.style.visibility = 'hidden'
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-}
-
-function exportMovementsToCsv(movements: InventoryMovementRecord[], filename = 'stock-movements.csv') {
-  const headers = ['Date', 'Product', 'Type', 'Quantity Change', 'Balance After', 'Reason']
-  const rows = movements.map(m => [
-    `"${new Date(m.createdAt).toLocaleString('en-PK')}"`,
-    `"${(m.productName || '').replace(/"/g, '""')}"`,
-    `"${m.type}"`,
-    m.quantityDelta,
-    m.balanceAfter,
-    `"${(m.reason || '').replace(/"/g, '""')}"`
-  ])
-  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.setAttribute('href', url)
-  link.setAttribute('download', filename)
-  link.style.visibility = 'hidden'
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-}
-
 function InventoryTable({
   products,
   onStockAdjustment,
@@ -179,13 +91,49 @@ function InventoryTable({
     <section className="card inventory-table-card">
       <div className="inventory-table-heading">
         <h2>Products Inventory</h2>
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button
             type="button"
-            onClick={() => exportProductsToCsv(products)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            onClick={() => exportToExcel({
+              filename: `inventory-products-${new Date().toISOString().slice(0, 10)}.xls`,
+              title: 'Products Inventory Report',
+              subtitle: `Total Products: ${products.length} | Stock Valuation`,
+              headers: ['Product Name', 'SKU', 'Barcode', 'Category', 'Brand', 'Unit', 'Stock Qty', 'Minimum Stock', 'Purchase Price (Rs)', 'Sale Price (Rs)', 'Status'],
+              rows: products.map(p => [
+                p.name || '',
+                p.sku || '',
+                p.barcode || '',
+                p.category || '',
+                p.brand || '',
+                p.unit || '',
+                p.stock,
+                p.minimumStock,
+                p.purchasePriceRupees.toFixed(2),
+                p.sellingPriceRupees.toFixed(2),
+                p.status,
+              ]),
+            })}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              height: '38px',
+              padding: '0 13px',
+              border: '1px solid #dce4ef',
+              borderRadius: '8px',
+              background: '#ffffff',
+              color: '#1e293b',
+              fontSize: '12.5px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+            }}
           >
-            <Icon name="download" size={15} /> Export
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+            </svg>
+            <span>Export Excel</span>
           </button>
           <button className="primary" onClick={() => onNavigate?.('Products')} style={{ color: '#ffffff' }}>
             <Icon name="plus" size={16} />
@@ -353,10 +301,41 @@ function StockMovementTable({ movements }: { movements: InventoryMovementRecord[
         <div>
           <button
             type="button"
-            onClick={() => exportMovementsToCsv(movements)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            onClick={() => exportToExcel({
+              filename: `stock-movements-${new Date().toISOString().slice(0, 10)}.xls`,
+              title: 'Stock Movements Report',
+              subtitle: `Total Movements: ${movements.length}`,
+              headers: ['Date & Time', 'Product', 'Type', 'Quantity Change', 'Balance After', 'Reason'],
+              rows: movements.map(m => [
+                new Date(m.createdAt).toLocaleString('en-PK'),
+                m.productName || '',
+                m.type,
+                m.quantityDelta,
+                m.balanceAfter,
+                m.reason || '',
+              ]),
+            })}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              height: '38px',
+              padding: '0 13px',
+              border: '1px solid #dce4ef',
+              borderRadius: '8px',
+              background: '#ffffff',
+              color: '#1e293b',
+              fontSize: '12.5px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+            }}
           >
-            <Icon name="download" size={15} /> Export
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+            </svg>
+            <span>Export Excel</span>
           </button>
         </div>
       </div>
@@ -400,37 +379,308 @@ function StockMovementTable({ movements }: { movements: InventoryMovementRecord[
   )
 }
 
-function StockAlerts({ products }: { products: ProductRecord[] }) {
-  const alerts = products.filter(product => product.stock <= product.minimumStock).slice(0, 5)
+function CategoryStockModal({
+  products,
+  onClose,
+}: {
+  products: ProductRecord[]
+  onClose: () => void
+}) {
+  useEscapeKey(onClose, true)
+  const [search, setSearch] = useState('')
+
+  const categoryStats = useMemo(() => {
+    const map = new Map<string, {
+      name: string
+      count: number
+      stock: number
+      valuationRupees: number
+      lowCount: number
+      outCount: number
+    }>()
+
+    for (const p of products) {
+      const cat = p.category || 'Uncategorized'
+      const existing = map.get(cat) || {
+        name: cat,
+        count: 0,
+        stock: 0,
+        valuationRupees: 0,
+        lowCount: 0,
+        outCount: 0,
+      }
+      existing.count += 1
+      existing.stock += p.stock
+      existing.valuationRupees += p.stock * p.purchasePriceRupees
+      if (p.stock <= 0) existing.outCount += 1
+      else if (p.stock <= p.minimumStock) existing.lowCount += 1
+      map.set(cat, existing)
+    }
+
+    return Array.from(map.values())
+  }, [products])
+
+  const grandTotalStock = useMemo(
+    () => Math.max(1, categoryStats.reduce((sum, c) => sum + c.stock, 0)),
+    [categoryStats]
+  )
+  const grandTotalValuation = useMemo(
+    () => categoryStats.reduce((sum, c) => sum + c.valuationRupees, 0),
+    [categoryStats]
+  )
+  const grandTotalProducts = useMemo(
+    () => categoryStats.reduce((sum, c) => sum + c.count, 0),
+    [categoryStats]
+  )
+
+  const filteredCategories = useMemo(
+    () =>
+      categoryStats.filter(c =>
+        c.name.toLowerCase().includes(search.trim().toLowerCase())
+      ),
+    [categoryStats, search]
+  )
+
+  const handleExportCategoryExcel = () => {
+    const headers = [
+      'Category',
+      'Total Products',
+      'Total Stock Qty',
+      'Total Valuation (Rs)',
+      'Stock Share (%)',
+      'Low Stock Items',
+      'Out of Stock Items',
+      'Status',
+    ]
+    const rows = categoryStats.map(c => [
+      c.name,
+      c.count,
+      c.stock,
+      c.valuationRupees.toFixed(2),
+      ((c.stock / grandTotalStock) * 100).toFixed(1) + '%',
+      c.lowCount,
+      c.outCount,
+      c.outCount > 0 ? 'Out of Stock' : c.lowCount > 0 ? 'Low Stock' : 'Healthy',
+    ])
+    exportToExcel({
+      filename: `category-stock-summary-${new Date().toISOString().slice(0, 10)}.xls`,
+      title: 'Category Stock Summary & Valuation',
+      subtitle: `Total Categories: ${categoryStats.length} | Total Stock Valuation: Rs. ${grandTotalValuation.toFixed(2)}`,
+      headers,
+      rows,
+    })
+  }
+
+  const handleExportCategoryPdf = () => {
+    const headers = [
+      'Category',
+      'Total Products',
+      'Total Stock Qty',
+      'Total Valuation (Rs)',
+      'Stock Share (%)',
+      'Low Stock Items',
+      'Out of Stock Items',
+      'Status',
+    ]
+    const rows = categoryStats.map(c => [
+      c.name,
+      c.count,
+      c.stock,
+      `Rs. ${c.valuationRupees.toFixed(2)}`,
+      ((c.stock / grandTotalStock) * 100).toFixed(1) + '%',
+      c.lowCount,
+      c.outCount,
+      c.outCount > 0 ? 'Out of Stock' : c.lowCount > 0 ? 'Low Stock' : 'Healthy',
+    ])
+    exportToPdf({
+      title: 'Category Stock Summary & Valuation Report',
+      subtitle: `Total Categories: ${categoryStats.length} | Total Valuation: Rs. ${grandTotalValuation.toFixed(2)}`,
+      headers,
+      rows,
+    })
+  }
+
   return (
-    <section className="card stock-alerts">
-      <div className="inventory-side-heading">
-        <h2>
-          <Icon name="bell" size={18} /> Stock Alerts
-        </h2>
-        <button>View All →</button>
-      </div>
-      <div className="stock-alert-list">
-        {alerts.map(product => (
-          <div className="stock-alert-row" key={product.id}>
-            <PosProductVisual
-              imageUrl={product.imageDataUrl}
-              category={product.category}
-              name={product.name}
-              kind={product.kind}
-              size={34}
-            />
-            <div>
-              <strong>{product.name}</strong>
-              <small>
-                <span>♟</span> Stock: {product.stock} | Min: {product.minimumStock}
-              </small>
-            </div>
-            <span>{product.stock <= 0 ? 'Out' : 'Low Stock'}</span>
+    <div
+      className="medkit-modal-backdrop"
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        width: '100vw',
+        height: '100vh',
+        background: 'rgba(15, 23, 42, 0.65)',
+        backdropFilter: 'blur(4px)',
+        zIndex: 99999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        className="modal-card"
+        style={{
+          width: '940px',
+          maxWidth: '95vw',
+          maxHeight: '88vh',
+          display: 'flex',
+          flexDirection: 'column',
+          margin: 'auto',
+          position: 'relative',
+          background: '#ffffff',
+          borderRadius: 14,
+          boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)',
+          overflow: 'hidden',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <header className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0, fontSize: 18, color: '#0f172a' }}>
+              <Icon name="chart" size={20} /> Category Stock Summary & Valuation
+            </h2>
+            <p style={{ margin: '4px 0 0', fontSize: 12.5, color: '#64748b' }}>
+              Comprehensive inventory breakdown and stock valuation by category.
+            </p>
           </div>
-        ))}
+          <button className="icon-button" onClick={onClose} aria-label="Close modal">✕</button>
+        </header>
+
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, background: '#f8fafc' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', border: '1px solid #cbd5e1', borderRadius: 6, padding: '6px 12px', width: 280 }}>
+            <Icon name="search" size={16} />
+            <input
+              type="text"
+              placeholder="Search category..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ border: 0, outline: 0, width: '100%', fontSize: 13 }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={handleExportCategoryExcel}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '7px 14px',
+                borderRadius: 6,
+                border: '1px solid #16a34a',
+                background: '#16a34a',
+                color: '#fff',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+              </svg>
+              <span>Export Excel</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportCategoryPdf}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '7px 14px',
+                borderRadius: 6,
+                border: '1px solid #dc2626',
+                background: '#dc2626',
+                color: '#fff',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+              <span>Export PDF</span>
+            </button>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid #e2e8f0', color: '#475569', fontSize: 12, textTransform: 'uppercase' }}>
+                <th style={{ padding: '12px 8px' }}>#</th>
+                <th style={{ padding: '12px 8px' }}>Category</th>
+                <th style={{ padding: '12px 8px', textAlign: 'center' }}>Products</th>
+                <th style={{ padding: '12px 8px', textAlign: 'right' }}>Total Stock</th>
+                <th style={{ padding: '12px 8px', textAlign: 'right' }}>Inventory Value</th>
+                <th style={{ padding: '12px 14px' }}>Stock Share</th>
+                <th style={{ padding: '12px 8px', textAlign: 'center' }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredCategories.map((c, i) => {
+                const sharePercent = Math.round((c.stock / grandTotalStock) * 100)
+                const isOut = c.outCount > 0
+                const isLow = c.lowCount > 0
+                return (
+                  <tr key={c.name} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '12px 8px', color: '#94a3b8' }}>{i + 1}</td>
+                    <td style={{ padding: '12px 8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: '50%', background: categoryColors[i % categoryColors.length] }} />
+                        <strong style={{ color: '#1e293b', textTransform: 'capitalize' }}>{c.name}</strong>
+                      </div>
+                    </td>
+                    <td style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 600 }}>{c.count}</td>
+                    <td style={{ padding: '12px 8px', textAlign: 'right', fontWeight: 600, color: '#0f172a' }}>{c.stock.toLocaleString('en-PK')}</td>
+                    <td style={{ padding: '12px 8px', textAlign: 'right', fontWeight: 700, color: '#2563eb' }}>Rs. {c.valuationRupees.toLocaleString('en-PK', { minimumFractionDigits: 2 })}</td>
+                    <td style={{ padding: '12px 14px', width: 160 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ flex: 1, height: 7, borderRadius: 4, background: '#e2e8f0', overflow: 'hidden' }}>
+                          <div style={{ width: `${sharePercent}%`, height: '100%', background: categoryColors[i % categoryColors.length], borderRadius: 4 }} />
+                        </div>
+                        <small style={{ minWidth: 32, fontSize: 11, color: '#64748b', fontWeight: 600 }}>{sharePercent}%</small>
+                      </div>
+                    </td>
+                    <td style={{ padding: '12px 8px', textAlign: 'center' }}>
+                      {isOut ? (
+                        <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: '#fee2e2', color: '#b91c1c' }}>Out of Stock</span>
+                      ) : isLow ? (
+                        <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: '#fef3c7', color: '#b45309' }}>Low Stock</span>
+                      ) : (
+                        <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: '#dcfce7', color: '#15803d' }}>Healthy</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: '2px solid #cbd5e1', background: '#f8fafc', fontWeight: 700, color: '#0f172a' }}>
+                <td style={{ padding: '12px 8px' }}>Total</td>
+                <td style={{ padding: '12px 8px' }}>{categoryStats.length} Categories</td>
+                <td style={{ padding: '12px 8px', textAlign: 'center' }}>{grandTotalProducts}</td>
+                <td style={{ padding: '12px 8px', textAlign: 'right' }}>{grandTotalStock.toLocaleString('en-PK')}</td>
+                <td style={{ padding: '12px 8px', textAlign: 'right', color: '#2563eb' }}>Rs. {grandTotalValuation.toLocaleString('en-PK', { minimumFractionDigits: 2 })}</td>
+                <td style={{ padding: '12px 14px' }}>100%</td>
+                <td style={{ padding: '12px 8px', textAlign: 'center' }}>—</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <footer style={{ padding: '14px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', background: '#f8fafc' }}>
+          <button className="primary" onClick={onClose} style={{ padding: '8px 24px', borderRadius: 6, background: '#4f46e5', color: '#fff', border: 0, fontWeight: 600, cursor: 'pointer' }}>Close</button>
+        </footer>
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -931,13 +1181,13 @@ function InventoryQuickActions({
   onAdjustment,
   onNavigate,
   onImportCsv,
-  onExportCsv,
+  onExportExcel,
   onPrintBarcode,
 }: {
   onAdjustment: () => void
   onNavigate?: (page: string) => void
   onImportCsv: () => void
-  onExportCsv: () => void
+  onExportExcel: () => void
   onPrintBarcode: () => void
 }) {
   const actions: [IconName, string][] = [
@@ -958,6 +1208,7 @@ function InventoryQuickActions({
       <div>
         {actions.map(([icon, label]) => (
           <button
+            key={label}
             onClick={
               label === 'Stock Adjustment'
                 ? onAdjustment
@@ -968,12 +1219,11 @@ function InventoryQuickActions({
                 : label === 'Import Products'
                 ? onImportCsv
                 : label === 'Export Products'
-                ? onExportCsv
+                ? onExportExcel
                 : label === 'Print Barcode'
                 ? onPrintBarcode
                 : undefined
             }
-            key={label}
           >
             <Icon name={icon} size={17} />
             <span>{label}</span>
@@ -984,7 +1234,7 @@ function InventoryQuickActions({
   )
 }
 
-function CategoryStockSummary({ products }: { products: ProductRecord[] }) {
+function CategoryStockSummary({ products, onViewAll }: { products: ProductRecord[]; onViewAll: () => void }) {
   const categories = useMemo(
     () =>
       Array.from(new Set(products.map(product => product.category)))
@@ -1004,7 +1254,7 @@ function CategoryStockSummary({ products }: { products: ProductRecord[] }) {
         <h2>
           <Icon name="chart" size={18} /> Category Stock Summary
         </h2>
-        <button>View All →</button>
+        <button type="button" onClick={onViewAll}>View All →</button>
       </div>
       <div className="category-stock-list">
         {categories.map(([name, count, color]) => (
@@ -1030,6 +1280,7 @@ function InventoryScreen({ onNavigate }: { onNavigate?: (page: string) => void }
   const { products, movements } = useRetailData()
   const [currentTime, setCurrentTime] = useState(() => new Date())
   const [selectedProductId, setSelectedProductId] = useState<string | undefined>()
+  const [showCategoryModal, setShowCategoryModal] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -1044,7 +1295,6 @@ function InventoryScreen({ onNavigate }: { onNavigate?: (page: string) => void }
     ['Stock Adjustments', ''],
     ['Low Stock', String(lowCount)],
     ['Expiry', ''],
-    ['Dead Stock', ''],
     ['Stock Transfer', ''],
   ]
   const visibleProducts = tab === 'Low Stock' ? products.filter(product => product.stock <= product.minimumStock) : products
@@ -1145,17 +1395,37 @@ function InventoryScreen({ onNavigate }: { onNavigate?: (page: string) => void }
           )}
         </div>
         <aside className="inventory-side">
-          <StockAlerts products={products} />
           <InventoryQuickActions
             onAdjustment={() => setTab('Stock Adjustments')}
             onNavigate={onNavigate}
             onImportCsv={() => fileInputRef.current?.click()}
-            onExportCsv={() => exportProductsToCsv(products)}
+            onExportExcel={() => exportToExcel({
+              filename: `inventory-products-${new Date().toISOString().slice(0, 10)}.xls`,
+              title: 'Products Inventory Report',
+              subtitle: `Total Products: ${products.length} | Stock Valuation`,
+              headers: ['Product Name', 'SKU', 'Barcode', 'Category', 'Brand', 'Unit', 'Stock Qty', 'Minimum Stock', 'Purchase Price (Rs)', 'Sale Price (Rs)', 'Status'],
+              rows: products.map(p => [
+                p.name || '',
+                p.sku || '',
+                p.barcode || '',
+                p.category || '',
+                p.brand || '',
+                p.unit || '',
+                p.stock,
+                p.minimumStock,
+                p.purchasePriceRupees.toFixed(2),
+                p.sellingPriceRupees.toFixed(2),
+                p.status,
+              ]),
+            })}
             onPrintBarcode={() => window.print()}
           />
-          <CategoryStockSummary products={products} />
+          <CategoryStockSummary products={products} onViewAll={() => setShowCategoryModal(true)} />
         </aside>
       </div>
+      {showCategoryModal && (
+        <CategoryStockModal products={products} onClose={() => setShowCategoryModal(false)} />
+      )}
     </motion.main>
   )
 }
@@ -1166,7 +1436,7 @@ export default function InventoryPage(props: PageProps) {
       {...props}
       activePage="Inventory"
       className="inventory-app"
-      header={onMenu => <InventoryHeader onMenu={onMenu} />}
+      header={() => <InventoryHeader onNavigate={props.onNavigate} />}
     >
       <InventoryScreen onNavigate={props.onNavigate} />
     </PageShell>

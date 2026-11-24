@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../../app/auth/useAuth'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
 import { Icon } from '../../shared/ui/Icon'
 import type { BranchRecord } from '../../types/branches'
 import type { StaffUser, UserRole } from '../../types/auth'
@@ -181,30 +182,31 @@ export default function StaffPage(props: PageProps) {
     <PageShell
       {...props}
       activePage="Staff"
-      header={menu => (
-        <header className="desktop-page-header flex items-center justify-between px-7 py-3.5 bg-white border-b border-slate-200">
-          <div className="flex items-center gap-3">
+      header={() => (
+        <TopNavHeader
+          title="Staff & Permissions"
+          subtitle="Manage employees, roles and tab access control"
+          onNavigate={props.onNavigate}
+          extraRight={
             <button
-              aria-label="Toggle sidebar"
-              onClick={menu}
-              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
-            >
-              <Icon name="menu" size={20} />
-            </button>
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Retail Management / Staff
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
+              type="button"
               disabled={busy}
               onClick={() => void load()}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #dce4ef',
+                background: '#f8fafc',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#475569',
+                cursor: 'pointer',
+              }}
             >
               Refresh
             </button>
-          </div>
-        </header>
+          }
+        />
       )}
     >
       <div className="medkit-page-container">

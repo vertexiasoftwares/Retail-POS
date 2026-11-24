@@ -1,4 +1,3 @@
-import { BusinessName, BranchName, UserName, UserRoleName } from '../../shared/layout/SessionIdentity'
 import { useAuth } from '../../app/auth/useAuth'
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
@@ -17,54 +16,20 @@ const dateLabel = (value: string) =>
     month: 'short',
     year: 'numeric',
   })
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { DateRangeFilter } from '../../shared/ui/DateRangeFilter'
+import { exportToExcel } from '../../shared/utils/exportUtils'
+
 const lineTotalPaisa = (item: PurchaseDraft['items'][number]) =>
   Math.round(item.quantity * item.unitCostRupees * 100)
 
-function PurchasesHeader({ onMenu }: { onMenu: () => void }) {
+function PurchasesHeader({ onNavigate }: { onNavigate?: (page: string) => void }) {
   return (
-    <header className="topbar purchases-topbar">
-      <button className="icon-button menu-button" aria-label="Toggle sidebar" onClick={onMenu}>
-        <Icon name="menu" size={23} />
-      </button>
-      <div className="search-field purchases-global-search">
-        <Icon name="search" size={19} />
-        <input aria-label="Search purchases" placeholder="Search purchases by invoice, supplier, items..." />
-        <kbd>Ctrl + K</kbd>
-      </div>
-      <div className="topbar-right">
-        <button className="icon-button notification-button" aria-label="Purchase notifications">
-          <Icon name="bell" size={24} />
-        </button>
-        <button className="store-switcher">
-          <span className="store-avatar">
-            <Icon name="store" size={22} />
-          </span>
-          <span>
-            <strong>
-              <BusinessName />
-            </strong>
-            <small>
-              <BranchName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-        <button className="profile-button">
-          <span className="avatar">
-            <Icon name="user" size={26} />
-          </span>
-          <span>
-            <strong>
-              <UserName />
-            </strong>
-            <small>
-              <UserRoleName />
-            </small>
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
-      </div>
-    </header>
+    <TopNavHeader
+      title="Purchases & Orders"
+      subtitle="Manage supplier purchases, invoices and inventory intake"
+      onNavigate={onNavigate}
+    />
   )
 }
 
@@ -201,6 +166,46 @@ function PurchasesTable({
           }}
         >
           Clear
+        </button>
+        <button
+          type="button"
+          onClick={() => exportToExcel({
+            filename: `purchases-report-${new Date().toISOString().slice(0, 10)}.xls`,
+            title: 'Purchases & Inward Orders Report',
+            subtitle: `Total Purchases: ${filtered.length}`,
+            headers: ['Purchase #', 'Date', 'Supplier', 'Invoice #', 'Total Amount (Rs)', 'Paid Amount (Rs)', 'Due Amount (Rs)', 'Status'],
+            rows: filtered.map(p => [
+              p.purchaseNumber,
+              dateLabel(p.purchaseDate),
+              p.supplier,
+              p.supplierInvoiceNumber || '',
+              p.totalAmountRupees.toFixed(2),
+              p.paidAmountRupees.toFixed(2),
+              p.dueAmountRupees.toFixed(2),
+              p.status,
+            ]),
+          })}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: '38px',
+            padding: '0 13px',
+            border: '1px solid #dce4ef',
+            borderRadius: '8px',
+            background: '#ffffff',
+            color: '#1e293b',
+            fontSize: '12.5px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+          </svg>
+          <span>Export Excel</span>
         </button>
       </div>
       <div className="purchases-table-scroll">
@@ -712,15 +717,18 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
             <p>Manage supplier purchases and stock inward</p>
           </div>
         </div>
-        <button
-          className="new-purchase"
-          disabled={loading || busy || Boolean(error)}
-          onClick={() => setShowForm(true)}
-          style={{ color: '#ffffff' }}
-        >
-          <Icon name="plus" size={18} />
-          <span style={{ color: '#ffffff' }}>New Purchase</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <DateRangeFilter />
+          <button
+            className="new-purchase"
+            disabled={loading || busy || Boolean(error)}
+            onClick={() => setShowForm(true)}
+            style={{ color: '#ffffff' }}
+          >
+            <Icon name="plus" size={18} />
+            <span style={{ color: '#ffffff' }}>New Purchase</span>
+          </button>
+        </div>
       </div>
       <RetailDataStatus />
       <PurchaseStats purchases={purchases} />
@@ -749,7 +757,7 @@ export default function PurchasesPage(props: PageProps) {
       {...props}
       activePage="Purchases"
       className="purchases-app"
-      header={onMenu => <PurchasesHeader onMenu={onMenu} />}
+      header={() => <PurchasesHeader onNavigate={props.onNavigate} />}
     >
       <PurchasesScreen onNavigate={props.onNavigate} />
     </PageShell>

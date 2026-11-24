@@ -6,6 +6,8 @@ import { useDesktopAction, useDesktopQuery } from '../../shared/hooks/useDesktop
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
+import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { exportToExcel } from '../../shared/utils/exportUtils'
 import { Icon } from '../../shared/ui/Icon'
 import type { CustomerQuery, CustomerReceipt } from '../../types/accounts'
 import type { RetailPaymentMethod } from '../../types/desktop-api'
@@ -149,30 +151,31 @@ export default function CustomersPage(props: PageProps) {
     <PageShell
       {...props}
       activePage="Customers"
-      header={menu => (
-        <header className="desktop-page-header flex items-center justify-between px-7 py-3.5 bg-white border-b border-slate-200">
-          <div className="flex items-center gap-3">
+      header={() => (
+        <TopNavHeader
+          title="Customer Accounts"
+          subtitle="Manage customer records, credit (udhaar) and balances"
+          onNavigate={props.onNavigate}
+          extraRight={
             <button
-              aria-label="Toggle sidebar"
-              onClick={menu}
-              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
-            >
-              <Icon name="menu" size={20} />
-            </button>
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Company workspace / Customers
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
+              type="button"
               disabled={action.busy || list.loading}
               onClick={notifyRetailDataChanged}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #dce4ef',
+                background: '#f8fafc',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#475569',
+                cursor: 'pointer',
+              }}
             >
               Refresh data
             </button>
-          </div>
-        </header>
+          }
+        />
       )}
     >
       <div className="medkit-page-container">
@@ -365,6 +368,49 @@ export default function CustomersPage(props: PageProps) {
 
           <button type="button" onClick={clearFilters} className="medkit-btn-clear">
             Clear
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const customers = list.data?.customers ?? []
+              exportToExcel({
+                filename: `customers-report-${new Date().toISOString().slice(0, 10)}.xls`,
+                title: 'Customer Accounts & Receivables Report',
+                subtitle: `Total Customers: ${customers.length}`,
+                headers: ['Customer Name', 'Phone', 'Total Sales (Rs)', 'Collected (Rs)', 'Balance / Due (Rs)', 'Status'],
+                rows: customers.map(c => [
+                  c.name,
+                  c.phone || '—',
+                  (c.creditSalesPaisa / 100).toFixed(2),
+                  (c.collectedPaisa / 100).toFixed(2),
+                  (c.balancePaisa / 100).toFixed(2),
+                  c.isActive ? 'Active' : 'Inactive',
+                ]),
+              })
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              height: '38px',
+              padding: '0 13px',
+              border: '1px solid #dce4ef',
+              borderRadius: '8px',
+              background: '#ffffff',
+              color: '#1e293b',
+              fontSize: '12.5px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+              marginLeft: 'auto',
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+            </svg>
+            <span>Export Excel</span>
           </button>
         </div>
 

@@ -7,7 +7,7 @@ export const rolePermissions = {
 };
 export function isUserRole(value) { return typeof value === 'string' && Object.hasOwn(rolePermissions, value); }
 export function canAccessPage(page, permissions, allowedTabs) {
-    if (page === 'My Account')
+    if (page === 'My Account' || page === 'Notifications')
         return true;
     if (allowedTabs && Array.isArray(allowedTabs) && allowedTabs.length > 0) {
         return allowedTabs.includes(page);

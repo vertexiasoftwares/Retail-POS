@@ -1333,6 +1333,19 @@ select:focus {
   outline: none !important;
 }
 
+select.date-filter-clean,
+.date-range-filter-card select {
+  border: none !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding-left: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  padding-right: 28px !important;
+  height: 100% !important;
+}
+
 select option {
   background: #ffffff !important;
   color: #0f172a !important;

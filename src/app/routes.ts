@@ -1,4 +1,4 @@
-﻿import type { ComponentType } from 'react'
+import type { ComponentType } from 'react'
 import type { PageProps } from '../shared/layout/PageShell'
 import type { PageName } from '../types'
 import LicensePage from '../features/licensing/LicensePage'
@@ -18,6 +18,7 @@ import StaffPage from '../features/staff/StaffPage'
 import ReportsPage from '../features/reports/ReportsPage'
 import SettingsPage from '../features/settings/SettingsPage'
 import AccountPage from '../features/account/AccountPage'
+import NotificationsPage from '../features/notifications/NotificationsPage'
 
 export const hashToPage: Record<string, PageName> = {
   '#license': 'License',
@@ -25,6 +26,7 @@ export const hashToPage: Record<string, PageName> = {
   '#inventory': 'Inventory', '#purchases': 'Purchases', '#customers': 'Customers',
   '#suppliers': 'Suppliers', '#cash-shifts': 'Cash & Shifts', '#expenses': 'Expenses',
   '#staff': 'Staff', '#reports': 'Reports', '#settings': 'Settings', '#my-account': 'My Account',
+  '#notifications': 'Notifications',
 }
 
 export const pageToHash: Record<PageName, string> = Object.fromEntries(
@@ -37,4 +39,5 @@ export const pages: Record<PageName, ComponentType<PageProps>> = {
   Inventory: InventoryPage, Purchases: PurchasesPage, Customers: CustomersPage,
   Suppliers: SuppliersPage, 'Cash & Shifts': CashShiftsPage, Expenses: ExpensesPage,
   Staff: StaffPage, Reports: ReportsPage, Settings: SettingsPage, 'My Account': AccountPage,
+  Notifications: NotificationsPage,
 }
