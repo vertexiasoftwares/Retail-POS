@@ -43,10 +43,26 @@ export function useProductsCatalog() {
   }
 
   const toggle=async(id:string) => { if(!window.vertexia)return;setBusy(true);try{const next=await window.vertexia.products.toggleStatus(branchId,id);notifyRetailDataChanged();setNotice(`Product ${next==='active'?'activated':'deactivated'}.`);await refresh()}catch(cause){setError(cause instanceof Error?cause.message:'Status could not be changed.')}finally{setBusy(false)} }
+  const remove=async(id:string) => {
+    if(!window.vertexia)return false
+    setBusy(true)
+    try {
+      const res=await window.vertexia.products.delete(branchId,id)
+      notifyRetailDataChanged()
+      setNotice(res.archived?'Product archived because it has financial history.':'Product deleted successfully.')
+      await refresh()
+      return true
+    } catch(cause) {
+      setError(cause instanceof Error?cause.message:'Product could not be deleted.')
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
   const importCsv=async(file:File) => { if(!window.vertexia)return;setBusy(true);try{const csv=await file.text();const imported=await window.vertexia.products.importCsv(branchId,csv);notifyRetailDataChanged();setNotice(`${imported.imported} products imported successfully.`);await refresh()}catch(cause){setError(cause instanceof Error?cause.message:'Products could not be imported.')}finally{setBusy(false)} }
   const exportCsv=async() => { if(!window.vertexia)return;setBusy(true);try{const exported=await window.vertexia.products.exportCsv(branchId);if(!exported.canceled)setNotice(`Products exported to ${exported.path}.`)}catch(cause){setError(cause instanceof Error?cause.message:'Products could not be exported.')}finally{setBusy(false)} }
 
-  return { products:result.products.map(toRecord),total:result.total,pageCount:result.pageCount,categories:result.categories,brands:result.brands,search,setSearch:(value:string)=>changeFilter(setSearch,value),category,setCategory:(value:string)=>changeFilter(setCategory,value),brand,setBrand:(value:string)=>changeFilter(setBrand,value),status,setStatus:(value:typeof status)=>{setStatus(value);setPage(1)},page,setPage,pageSize,setPageSize:(value:number)=>{setPageSize(value);setPage(1)},loading,busy,error,setError,notice,refresh,save,toggle,importCsv,exportCsv }
+  return { products:result.products.map(toRecord),total:result.total,pageCount:result.pageCount,categories:result.categories,brands:result.brands,search,setSearch:(value:string)=>changeFilter(setSearch,value),category,setCategory:(value:string)=>changeFilter(setCategory,value),brand,setBrand:(value:string)=>changeFilter(setBrand,value),status,setStatus:(value:typeof status)=>{setStatus(value);setPage(1)},page,setPage,pageSize,setPageSize:(value:number)=>{setPageSize(value);setPage(1)},loading,busy,error,setError,notice,refresh,save,toggle,remove,importCsv,exportCsv }
 }
 
 export type ProductsController=ReturnType<typeof useProductsCatalog>

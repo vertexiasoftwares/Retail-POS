@@ -79,6 +79,34 @@ export function registerProductsRoutes(
     }
   });
 
+  // POST /api/products/delete
+  app.post('/api/products/delete', async (request, reply) => {
+    const body = request.body as { branchId: string; id: string } | undefined;
+    if (!body || !body.branchId || !body.id) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'branchId and product id are required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'products.manage', body.branchId, true);
+    if (!guarded) return;
+
+    try {
+      const result = db.deleteProduct(body.branchId, body.id);
+      sync?.broadcast({
+        type: 'product:updated',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+        payload: { productId: body.id, deleted: true },
+      });
+      sync?.broadcast({
+        type: 'inventory:changed',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+      });
+      return result;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'DeleteProductError', message: err?.message || 'Failed to delete product.', statusCode: 400 });
+    }
+  });
+
   // POST /api/products/import-csv
   app.post('/api/products/import-csv', async (request, reply) => {
     const body = request.body as { branchId: string; csv: string } | undefined;

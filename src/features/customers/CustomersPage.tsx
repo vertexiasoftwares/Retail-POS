@@ -4,6 +4,7 @@ import { notifyRetailDataChanged } from '../../services/retail-events'
 import { accountPaymentMethods, moneyPaisa as money, parseMoney } from '../../shared/account-format'
 import { useDesktopAction, useDesktopQuery } from '../../shared/hooks/useDesktopQuery'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
+import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { Icon } from '../../shared/ui/Icon'
 import type { CustomerQuery, CustomerReceipt } from '../../types/accounts'
@@ -46,6 +47,14 @@ export default function CustomersPage(props: PageProps) {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [showCollectModal, setShowCollectModal] = useState(false)
+  const [actionMenuId, setActionMenuId] = useState<string | null>(null)
+
+  useEscapeKey(() => {
+    setShowAddModal(false)
+    setShowEditModal(false)
+    setShowCollectModal(false)
+    setActionMenuId(null)
+  }, showAddModal || showEditModal || showCollectModal || Boolean(actionMenuId))
 
   // Form states
   const [name, setName] = useState('')
@@ -179,20 +188,6 @@ export default function CustomersPage(props: PageProps) {
             </div>
           </div>
           <div className="medkit-banner-actions">
-            {can('customers.create') && (
-              <button
-                type="button"
-                onClick={() => {
-                  setName('')
-                  setPhone('')
-                  setOpening('0')
-                  setShowAddModal(true)
-                }}
-                className="medkit-btn-primary"
-              >
-                <span>+</span> Add Customer
-              </button>
-            )}
           </div>
         </div>
 
@@ -218,8 +213,7 @@ export default function CustomersPage(props: PageProps) {
               <div className="medkit-stat-label">Total Customers</div>
               <div className="medkit-stat-value">{totalCount}</div>
               <div className="medkit-stat-meta">
-                <span className="medkit-trend-up">↑ 12%</span>
-                <span>All registered customers</span>
+                <span>{totalCount > 0 ? `${totalCount} registered` : 'No customers yet'}</span>
               </div>
             </div>
           </div>
@@ -232,10 +226,9 @@ export default function CustomersPage(props: PageProps) {
             <div className="medkit-stat-body">
               <div className="medkit-stat-label">Total Purchases</div>
               <div className="medkit-stat-value">
-                {totalSalesEstimated > 0 ? money(totalSalesEstimated) : 'Rs. 1,856,400'}
+                {money(totalSalesEstimated)}
               </div>
               <div className="medkit-stat-meta">
-                <span className="medkit-trend-up">↑ 18%</span>
                 <span>Total sales to customers</span>
               </div>
             </div>
@@ -249,10 +242,9 @@ export default function CustomersPage(props: PageProps) {
             <div className="medkit-stat-body">
               <div className="medkit-stat-label">Total Received</div>
               <div className="medkit-stat-value">
-                {totalReceivedEstimated > 0 ? money(totalReceivedEstimated) : 'Rs. 1,450,000'}
+                {money(totalReceivedEstimated)}
               </div>
               <div className="medkit-stat-meta">
-                <span className="medkit-trend-up">↑ 15%</span>
                 <span>Total payments received</span>
               </div>
             </div>
@@ -266,10 +258,9 @@ export default function CustomersPage(props: PageProps) {
             <div className="medkit-stat-body">
               <div className="medkit-stat-label">Outstanding Amount</div>
               <div className="medkit-stat-value">
-                {outstandingPaisa > 0 ? money(outstandingPaisa) : 'Rs. 406,400'}
+                {money(outstandingPaisa)}
               </div>
               <div className="medkit-stat-meta">
-                <span className="medkit-trend-down">↑ 8%</span>
                 <span>Total customer due</span>
               </div>
             </div>
@@ -413,7 +404,7 @@ export default function CustomersPage(props: PageProps) {
                       </td>
                     </tr>
                   )}
-                  {list.data?.customers.map(row => {
+                  {list.data?.customers.map((row, idx) => {
                     const isSelected = selectedId === row.id
                     const initials = getInitials(row.name)
                     const avatarColor = getAvatarColor(row.name)
@@ -458,15 +449,60 @@ export default function CustomersPage(props: PageProps) {
                             {row.isActive ? 'Active' : 'Inactive'}
                           </span>
                         </td>
-                        <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                        <td style={{ textAlign: 'center', position: 'relative', zIndex: actionMenuId === row.id ? 60 : 1 }} onClick={e => e.stopPropagation()}>
                           <button
                             type="button"
-                            onClick={() => choose(row.id)}
+                            onClick={() => {
+                              choose(row.id)
+                              setActionMenuId(actionMenuId === row.id ? null : row.id)
+                            }}
                             className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100"
-                            title="View customer"
+                            title="More actions"
                           >
                             ···
                           </button>
+                          {actionMenuId === row.id && (
+                            <div
+                              className={`absolute right-2 ${idx >= 2 || ((list.data?.customers.length || 0) <= 4 && idx >= 1) ? 'bottom-8' : 'top-8'} z-50 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 text-left text-xs animate-in fade-in`}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActionMenuId(null)
+                                  choose(row.id)
+                                }}
+                                className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium"
+                              >
+                                <Icon name="user" size={14} /> View Details
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActionMenuId(null)
+                                  choose(row.id)
+                                  openCollect()
+                                }}
+                                className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium"
+                              >
+                                <Icon name="cash" size={14} /> Collect Payment
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActionMenuId(null)
+                                  choose(row.id)
+                                  setEditName(row.name)
+                                  setEditPhone(row.phone || '')
+                                  setEditActive(row.isActive)
+                                  setShowEditModal(true)
+                                }}
+                                className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium"
+                              >
+                                <Icon name="settings" size={14} /> Edit Customer
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )

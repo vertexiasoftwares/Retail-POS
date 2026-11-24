@@ -220,19 +220,21 @@ export function LoginPage({
             <button
               type="submit"
               disabled={busy}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5E0CF3] py-3.5 text-sm font-bold uppercase tracking-wide text-white shadow-lg shadow-[#5E0CF3]/25 transition-all hover:bg-[#5113ce] active:bg-[#430cb8] active:scale-[0.98] disabled:opacity-70 cursor-pointer font-heading"
+              style={{ color: '#ffffff' }}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5E0CF3] py-3.5 text-sm font-bold uppercase tracking-wide !text-white shadow-lg shadow-[#5E0CF3]/25 transition-all hover:bg-[#5113ce] active:bg-[#430cb8] active:scale-[0.98] disabled:opacity-70 cursor-pointer font-heading"
             >
-              {busy ? 'Signing In...' : 'Sign In'}
+              <span style={{ color: '#ffffff' }}>{busy ? 'Signing In...' : 'Sign In'}</span>
             </button>
           </form>
 
           <button
             type="button"
             onClick={onNavigateToActivate}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#6d4aff] to-[#5E0CF3] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#5E0CF3]/25 transition-all hover:from-[#5e38e8] hover:to-[#4e07d0] active:scale-[0.98] cursor-pointer font-body"
+            style={{ color: '#ffffff' }}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#6d4aff] to-[#5E0CF3] py-3.5 text-sm font-bold !text-white shadow-lg shadow-[#5E0CF3]/25 transition-all hover:from-[#5e38e8] hover:to-[#4e07d0] active:scale-[0.98] cursor-pointer font-body"
           >
-            <Icon name="key" size={18} className="text-white/95" />
-            <span>Activate POS License</span>
+            <Icon name="key" size={18} className="text-white" />
+            <span style={{ color: '#ffffff' }}>Activate POS License</span>
           </button>
 
           <button

@@ -47,6 +47,7 @@ export function registerAuthRoutes(
           branches: session.branches,
           branchId: session.branchId,
           permissions: session.permissions,
+          allowedTabs: session.allowedTabs,
           mustChangePassword: session.mustChangePassword,
         },
       };
@@ -133,6 +134,7 @@ export function registerAuthRoutes(
           branches: session.branches,
           branchId: session.branchId,
           permissions: session.permissions,
+          allowedTabs: session.allowedTabs,
           mustChangePassword: session.mustChangePassword,
         },
       };
@@ -152,6 +154,11 @@ export function registerAuthRoutes(
     }
     try {
       const session = await auth.setup(body);
+      try {
+        const { token } = await auth.loginWithToken(body.username, body.password);
+        const secure = isSecureRequest(request);
+        setSessionCookie(reply, token, secure);
+      } catch {}
       return { ok: true, session };
     } catch (err: any) {
       return reply.status(400).send({ error: 'SetupError', message: err?.message || 'Setup failed.', statusCode: 400 });
@@ -244,6 +251,7 @@ export function registerAuthRoutes(
           branches: session.branches,
           branchId: session.branchId,
           permissions: session.permissions,
+          allowedTabs: session.allowedTabs,
           mustChangePassword: session.mustChangePassword,
         },
       };

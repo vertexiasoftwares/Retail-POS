@@ -139,6 +139,35 @@ export class RetailRepository {
     })
   }
 
+  createSupplier(nameOrInput: string | any, phone?: string): { id: string; name: string } {
+    const isObj = typeof nameOrInput === 'object' && nameOrInput !== null
+    const name = (isObj ? nameOrInput.name : nameOrInput)?.trim()
+    if (!name) throw new Error('Supplier name is required.')
+    const existing = this.db.prepare('SELECT id FROM suppliers WHERE business_id=? AND name=? COLLATE NOCASE').get(this.businessId, name) as Row | undefined
+    if (existing) throw new Error('A supplier with this name already exists.')
+    const id = `sup-${randomUUID()}`
+    const time = this.now().toISOString()
+    const p = isObj ? (nameOrInput.phone?.trim() || null) : (phone?.trim() || null)
+
+    this.db.prepare('INSERT INTO suppliers(id, business_id, name, phone, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(id, this.businessId, name, p, time)
+
+    if (isObj) {
+      const contactPerson = nameOrInput.contactPerson?.trim() || null
+      const email = nameOrInput.email?.trim() || null
+      const ntnStrn = nameOrInput.ntnStrn?.trim() || null
+      const city = nameOrInput.city?.trim() || null
+      const address = nameOrInput.address?.trim() || null
+      const categories = nameOrInput.categories?.trim() || null
+      const paymentTerms = nameOrInput.paymentTerms?.trim() || null
+      const note = nameOrInput.note?.trim() || null
+      const openingBalancePaisa = nameOrInput.openingBalanceRupees ? Math.round(Number(nameOrInput.openingBalanceRupees) * 100) : 0
+
+      this.db.prepare('INSERT INTO supplier_profiles(supplier_id, contact_person, email, ntn_strn, city, address, categories, opening_balance_paisa, payment_terms, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, contactPerson, email, ntnStrn, city, address, categories, openingBalancePaisa, paymentTerms, note)
+    }
+
+    return { id, name }
+  }
+
   paySupplier(request: SupplierPayRequest): { paymentId: string; outstandingPaisa: number } {
     if (!request || typeof request !== 'object') throw new Error('Invalid supplier payment.')
     requireText(request.operationId, 'Operation identifier', 100)
@@ -191,11 +220,31 @@ export class RetailRepository {
         LEFT JOIN supplier_payment_allocations a ON a.purchase_id=p.id WHERE p.branch_id=? AND p.business_id=?
         GROUP BY p.id ORDER BY p.created_at DESC,p.rowid DESC`).all(branchId, this.businessId) as Row[]).map(row => ({ id: String(row.id), supplierId: String(row.supplier_id), purchaseNumber: String(row.purchase_number), supplierName: String(row.supplier_name_snapshot), supplierInvoiceNumber: String(row.supplier_invoice_number), businessDate: String(row.business_date), totalPaisa: Number(row.total_paisa), paidPaisa: Number(row.paid), duePaisa: Number(row.total_paisa) - Number(row.paid), createdAt: String(row.created_at), lines: itemMap.get(String(row.id)) ?? [] }))
       const suppliers = (this.db.prepare(`SELECT s.*,
+        sp.contact_person, sp.email, sp.ntn_strn, sp.city, sp.address, sp.categories, sp.payment_terms, sp.note,
         COALESCE((SELECT SUM(CASE WHEN entry_type='purchase' THEN debit_paisa ELSE 0 END) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0) AS total_purchases,
         COALESCE((SELECT SUM(credit_paisa) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0) AS total_paid,
         (SELECT MAX(business_date) FROM purchases p WHERE p.supplier_id=s.id AND p.branch_id=?) AS last_purchase,
-        COALESCE((SELECT SUM(debit_paisa-credit_paisa) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0) AS outstanding
-        FROM suppliers s WHERE s.business_id=? ORDER BY s.name,s.id`).all(branchId, branchId, branchId, branchId, this.businessId) as Row[]).map(row => ({ id: String(row.id), name: String(row.name), phone: String(row.phone ?? ''), isActive: Boolean(row.is_active), totalPurchasesPaisa: Number(row.total_purchases), totalPaidPaisa: Number(row.total_paid), outstandingPaisa: Number(row.outstanding), lastPurchaseDate: row.last_purchase === null ? null : String(row.last_purchase) }))
+        (COALESCE(sp.opening_balance_paisa, 0) + COALESCE((SELECT SUM(debit_paisa-credit_paisa) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0)) AS outstanding
+        FROM suppliers s
+        LEFT JOIN supplier_profiles sp ON sp.supplier_id=s.id
+        WHERE s.business_id=? ORDER BY s.name,s.id`).all(branchId, branchId, branchId, branchId, this.businessId) as Row[]).map(row => ({
+          id: String(row.id),
+          name: String(row.name),
+          phone: String(row.phone ?? ''),
+          isActive: Boolean(row.is_active),
+          totalPurchasesPaisa: Number(row.total_purchases),
+          totalPaidPaisa: Number(row.total_paid),
+          outstandingPaisa: Number(row.outstanding),
+          lastPurchaseDate: row.last_purchase === null ? null : String(row.last_purchase),
+          contactPerson: String(row.contact_person ?? ''),
+          email: String(row.email ?? ''),
+          ntnStrn: String(row.ntn_strn ?? ''),
+          city: String(row.city ?? ''),
+          address: String(row.address ?? ''),
+          categories: String(row.categories ?? ''),
+          paymentTerms: String(row.payment_terms ?? ''),
+          note: String(row.note ?? ''),
+        }))
       const payments = (this.db.prepare(`SELECT sp.* FROM supplier_payments sp JOIN suppliers s ON s.id=sp.supplier_id WHERE sp.branch_id=? AND s.business_id=? ORDER BY sp.created_at DESC,sp.rowid DESC`).all(branchId, this.businessId) as Row[]).map(row => ({ id: String(row.id), supplierId: String(row.supplier_id), businessDate: String(row.business_date), method: String(row.method) as RetailPaymentMethod, amountPaisa: Number(row.amount_paisa), reference: String(row.reference), createdAt: String(row.created_at) }))
       const supplierLedger = (this.db.prepare(`SELECT l.*,COALESCE(p.business_date,sp.business_date,date(l.occurred_at,'+5 hours')) AS business_date,
         COALESCE(p.purchase_number,sp.reference,l.reference_id) AS display_reference,

@@ -8,7 +8,11 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
   Inventory: ['transfers.read', 'transfers.dispatch', 'transfers.receive', 'products.read', 'products.manage', 'retail.read', 'stock.adjust', 'purchases.receive'],
 }
 export function isUserRole(value: unknown): value is UserRole { return typeof value === 'string' && Object.hasOwn(rolePermissions, value) }
-export function canAccessPage(page: string, permissions: readonly Permission[]): boolean {
+export function canAccessPage(page: string, permissions: readonly Permission[], allowedTabs?: readonly string[]): boolean {
+  if (page === 'My Account') return true
+  if (allowedTabs && Array.isArray(allowedTabs) && allowedTabs.length > 0) {
+    return allowedTabs.includes(page)
+  }
   const required: Record<string, Permission> = { License: 'settings.manage', Branches: 'branches.manage', 'Stock Transfers': 'transfers.read', Reports: 'reports.read', Customers: 'customers.read', Expenses: 'expenses.read', Dashboard: 'dashboard.read', POS: 'pos.sell', Sales: 'sales.read', Products: 'products.read', Inventory: 'retail.read', Purchases: 'purchases.receive', Suppliers: 'suppliers.pay', Staff: 'users.manage', 'Cash & Shifts': 'shifts.read', Settings: 'settings.manage' }
-  return page === 'My Account' || Boolean(required[page] && permissions.includes(required[page]))
+  return Boolean(required[page] && permissions.includes(required[page]))
 }

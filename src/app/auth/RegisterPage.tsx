@@ -67,22 +67,7 @@ export function RegisterPage({ onSuccess, onNavigateToLogin, onNavigateToActivat
         businessType: formData.businessType.trim() || 'Retail Mart / POS',
       }
 
-      // 1. Save cloud registration and notify central server (throws on network failure)
-      await registerRetailBusiness(regInput)
-      storeRegistration(regInput)
-
-      // 2. Persist new store identity so LicenseActivation displays the new Store Registration ID
-      localStorage.setItem(
-        'vertexiaRegistrationIdentity',
-        JSON.stringify({
-          businessId: finalBusinessId,
-          installationId: identity.installationId,
-          deviceIdentifier: identity.deviceIdentifier,
-        })
-      )
-      localStorage.removeItem('vertexia_cloud_license')
-
-      // 3. Setup local desktop auth repository if needed
+      // 1. Setup local auth repository first
       if (window.vertexia?.auth) {
         try {
           await window.vertexia.auth.setup({
@@ -101,6 +86,25 @@ export function RegisterPage({ onSuccess, onNavigateToLogin, onNavigateToActivat
           return
         }
       }
+
+      // 2. Persist new store identity so LicenseActivation displays the new Store Registration ID
+      localStorage.setItem(
+        'vertexiaRegistrationIdentity',
+        JSON.stringify({
+          businessId: finalBusinessId,
+          installationId: identity.installationId,
+          deviceIdentifier: identity.deviceIdentifier,
+        })
+      )
+      localStorage.removeItem('vertexia_cloud_license')
+
+      // 3. Save cloud registration and notify central server (non-blocking fallback)
+      try {
+        await registerRetailBusiness(regInput)
+      } catch (cloudErr: any) {
+        console.warn('Online cloud registration notice:', cloudErr?.message || cloudErr)
+      }
+      storeRegistration(regInput)
 
       onSuccess()
     } catch (err: any) {

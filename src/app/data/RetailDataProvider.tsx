@@ -22,7 +22,24 @@ function view(snapshot: RetailSnapshot): ViewData {
     products: snapshot.products.map((item): ProductRecord => ({ id: item.id, kind: item.kind, name: item.name, barcode: item.barcode, sku: item.sku, category: item.category, subcategory: item.subcategory, brand: item.brand, unit: item.unit, purchasePriceRupees: item.purchasePricePaisa / 100, sellingPriceRupees: item.sellingPricePaisa / 100, mrpRupees: item.mrpPaisa / 100, minimumStock: item.minimumStockMilli / 1000, stock: item.stockMilli / 1000, status: item.status, imageDataUrl: item.imageDataUrl, createdAt: item.createdAt, updatedAt: item.updatedAt })),
     movements: snapshot.movements.map((item): InventoryMovementRecord => ({ id: item.id, productId: item.productId, productName: item.productName, type: item.type, quantityDelta: item.quantityDeltaMilli / 1000, balanceAfter: item.balanceAfterMilli / 1000, reason: item.reason, referenceId: item.referenceId, createdAt: item.occurredAt })),
     purchases: snapshot.purchases.map((item): PurchaseRecord => ({ id: item.id, supplierId: item.supplierId, purchaseNumber: item.purchaseNumber, supplier: item.supplierName, supplierInvoiceNumber: item.supplierInvoiceNumber, purchaseDate: item.businessDate, itemCount: item.lines.length, totalAmountRupees: item.totalPaisa / 100, paidAmountRupees: item.paidPaisa / 100, dueAmountRupees: item.duePaisa / 100, status: item.duePaisa === 0 ? 'Paid' : item.paidPaisa === 0 ? 'Unpaid' : 'Partial', items: item.lines.map(line => ({ productId: line.productId, quantity: line.quantityMilli / 1000, unitCostRupees: line.unitCostPaisa / 100 })), createdAt: item.createdAt })),
-    suppliers: snapshot.suppliers.map((item): SupplierRecord => ({ id: item.id, name: item.name, phone: item.phone, city: '', email: '', categories: '', note: '', totalPurchasesRupees: item.totalPurchasesPaisa / 100, totalPaidRupees: item.totalPaidPaisa / 100, outstandingRupees: item.outstandingPaisa / 100, lastPurchaseDate: item.lastPurchaseDate, status: item.isActive ? 'Active' : 'Inactive' })),
+    suppliers: snapshot.suppliers.map((item): SupplierRecord => ({
+      id: item.id,
+      name: item.name,
+      phone: item.phone,
+      city: item.city || '',
+      email: item.email || '',
+      categories: item.categories || '',
+      note: item.note || '',
+      contactPerson: item.contactPerson || '',
+      ntnStrn: item.ntnStrn || '',
+      address: item.address || '',
+      paymentTerms: item.paymentTerms || '',
+      totalPurchasesRupees: item.totalPurchasesPaisa / 100,
+      totalPaidRupees: item.totalPaidPaisa / 100,
+      outstandingRupees: item.outstandingPaisa / 100,
+      lastPurchaseDate: item.lastPurchaseDate,
+      status: item.isActive ? 'Active' : 'Inactive'
+    })),
     supplierPayments: snapshot.payments.map((item): SupplierPaymentRecord => ({ id: item.id, supplierId: item.supplierId, date: item.businessDate, method: item.method, amountRupees: item.amountPaisa / 100, reference: item.reference, createdAt: item.createdAt })),
     supplierLedger: snapshot.supplierLedger.map((item): SupplierLedgerEntry => ({ id: item.id, supplierId: item.supplierId, date: item.businessDate, type: item.type as SupplierLedgerEntry['type'], reference: item.reference, debitRupees: item.debitPaisa / 100, creditRupees: item.creditPaisa / 100, balanceAfterRupees: item.balanceAfterPaisa / 100, createdAt: item.occurredAt })),
   }
@@ -86,6 +103,7 @@ export function RetailDataProvider({ children }: { children: ReactNode }) {
   const adjustStock = (productId: string, delta: number, reason: string, operationId: string) => run(() => window.vertexia!.retail.adjustStock({ branchId, operationId, productId, quantityDeltaMilli: toFixedUnits(delta, 1000, 'Quantity'), reason }))
   const receivePurchase = (draft: PurchaseDraft, operationId: string) => run(() => window.vertexia!.retail.receivePurchase({ branchId, operationId, supplierName: draft.supplier, supplierInvoiceNumber: draft.supplierInvoiceNumber, businessDate: draft.purchaseDate, paidAmountPaisa: toFixedUnits(draft.paidAmountRupees, 100, 'Paid amount'), paymentMethod: draft.paymentMethod, lines: draft.items.map(line => ({ productId: line.productId, quantityMilli: toFixedUnits(line.quantity, 1000, 'Quantity'), unitCostPaisa: toFixedUnits(line.unitCostRupees, 100, 'Unit cost') })) }))
   const paySupplier = (supplierId: string, amount: number, method: SupplierPaymentMethod, reference: string, operationId: string) => run(() => window.vertexia!.retail.paySupplier({ branchId, operationId, supplierId, amountPaisa: toFixedUnits(amount, 100, 'Payment'), method, reference }))
+  const createSupplier = (name: string | any, phone?: string) => run(() => window.vertexia!.retail.createSupplier(name, phone))
 
-  return <RetailDataContext.Provider value={{ ...snapshot, loading, busy, error, legacyDataAvailable, refresh, adjustStock, receivePurchase, paySupplier }}>{children}</RetailDataContext.Provider>
+  return <RetailDataContext.Provider value={{ ...snapshot, loading, busy, error, legacyDataAvailable, refresh, adjustStock, receivePurchase, paySupplier, createSupplier }}>{children}</RetailDataContext.Provider>
 }

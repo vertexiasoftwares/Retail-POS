@@ -9,6 +9,10 @@ export type SupplierRecord = {
   email: string
   categories: string
   note: string
+  contactPerson?: string
+  ntnStrn?: string
+  address?: string
+  paymentTerms?: string
   totalPurchasesRupees: number
   totalPaidRupees: number
   outstandingRupees: number

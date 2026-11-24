@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../../app/auth/useAuth'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
+import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { Icon } from '../../shared/ui/Icon'
 import type { CashSnapshot } from '../../types/recovery'
@@ -11,6 +12,32 @@ const money = (value: number) =>
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   })
+
+type DenominationCounts = Record<5000 | 1000 | 500 | 100 | 50 | 20 | 10 | 'coins', number>
+
+const defaultDenominations: DenominationCounts = {
+  5000: 0,
+  1000: 0,
+  500: 0,
+  100: 0,
+  50: 0,
+  20: 0,
+  10: 0,
+  coins: 0,
+}
+
+function computeDenominationsTotal(d: DenominationCounts): number {
+  return (
+    d[5000] * 5000 +
+    d[1000] * 1000 +
+    d[500] * 500 +
+    d[100] * 100 +
+    d[50] * 50 +
+    d[20] * 20 +
+    d[10] * 10 +
+    d.coins
+  )
+}
 
 function amount(value: string) {
   if (!/^\d+(\.\d{1,2})?$/.test(value.trim()))
@@ -31,9 +58,26 @@ export default function CashShiftsPage(props: PageProps) {
   const [showOpenModal, setShowOpenModal] = useState(false)
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
+  const [showForceCloseModal, setShowForceCloseModal] = useState(false)
+  const [forceCloseShiftId, setForceCloseShiftId] = useState<string | null>(null)
+  const [forceCloseReason, setForceCloseReason] = useState('')
+
+  useEscapeKey(() => {
+    setShowOpenModal(false)
+    setShowCloseModal(false)
+    setShowMoveModal(false)
+    setShowForceCloseModal(false)
+  }, showOpenModal || showCloseModal || showMoveModal || showForceCloseModal)
 
   // Forms
-  const [opening, setOpening] = useState('0')
+  const [opening, setOpening] = useState('')
+  const [selectedCounterOption, setSelectedCounterOption] = useState('Counter 1')
+  const [customCounterName, setCustomCounterName] = useState('')
+  const [openNote, setOpenNote] = useState('')
+  const [inlineError, setInlineError] = useState('')
+  const [showDenominations, setShowDenominations] = useState(false)
+  const [denominations, setDenominations] = useState<DenominationCounts>(defaultDenominations)
+
   const [counted, setCounted] = useState('')
   const [note, setNote] = useState('')
 
@@ -48,6 +92,20 @@ export default function CashShiftsPage(props: PageProps) {
   const openOperation = useOperationIdentity('shift-open')
   const closeOperation = useOperationIdentity('shift-close')
   const moveOperation = useOperationIdentity('cash-move')
+
+  // Handle Escape key to close any open modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowOpenModal(false)
+        setShowCloseModal(false)
+        setShowMoveModal(false)
+        setShowForceCloseModal(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   const refresh = useCallback(async () => {
     setData(await window.vertexia!.cash.getSnapshot(branchId))
@@ -85,44 +143,95 @@ export default function CashShiftsPage(props: PageProps) {
 
   const shift = data?.activeShift
 
-  // Computed Stats
-  const openingCashPaisa = shift?.openingCashPaisa ?? 500000
+  // Computed Stats - Connected strictly to real shift data, 0 when no active shift
+  const openingCashPaisa = shift ? shift.openingCashPaisa : 0
   const cashSalesPaisa = useMemo(() => {
+    if (!shift) return 0
     return (
       data?.movements
         ?.filter(m => m.type.toLowerCase().includes('sale') && m.direction === 'in')
-        .reduce((sum, m) => sum + m.amountPaisa, 0) || 4285000
+        .reduce((sum, m) => sum + m.amountPaisa, 0) ?? 0
     )
-  }, [data?.movements])
+  }, [shift, data?.movements])
 
   const cashReceivedPaisa = useMemo(() => {
+    if (!shift) return 0
     return (
       data?.movements
         ?.filter(m => m.type.toLowerCase().includes('payment') && m.direction === 'in')
-        .reduce((sum, m) => sum + m.amountPaisa, 0) || 500000
+        .reduce((sum, m) => sum + m.amountPaisa, 0) ?? 0
     )
-  }, [data?.movements])
+  }, [shift, data?.movements])
 
   const cashExpensesPaisa = useMemo(() => {
+    if (!shift) return 0
     return (
       data?.movements
         ?.filter(m => m.direction === 'out')
-        .reduce((sum, m) => sum + m.amountPaisa, 0) || 320000
+        .reduce((sum, m) => sum + m.amountPaisa, 0) ?? 0
     )
-  }, [data?.movements])
+  }, [shift, data?.movements])
 
-  const expectedClosingPaisa = shift?.expectedCashPaisa ?? openingCashPaisa + cashSalesPaisa + cashReceivedPaisa - cashExpensesPaisa
+  const expectedClosingPaisa = shift
+    ? (shift.expectedCashPaisa ?? (openingCashPaisa + cashSalesPaisa + cashReceivedPaisa - cashExpensesPaisa))
+    : 0
   const actualClosingPaisa = counted !== '' && /^\d+(\.\d{1,2})?$/.test(counted) ? Math.round(Number(counted) * 100) : expectedClosingPaisa
   const differencePaisa = actualClosingPaisa - expectedClosingPaisa
 
   // Calculate shift duration
   const shiftDuration = useMemo(() => {
-    if (!shift) return '4h 35m'
+    if (!shift) return 'No active shift'
     const diffMs = Math.max(0, Date.now() - new Date(shift.openedAt).getTime())
     const hours = Math.floor(diffMs / (1000 * 60 * 60))
     const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
     return `${hours}h ${mins}m`
   }, [shift])
+
+  // Previous closed shift
+  const lastClosedShift = useMemo(() => {
+    return data?.shifts?.find(s => s.status === 'closed') ?? null
+  }, [data?.shifts])
+  const lastClosingCashPaisa = lastClosedShift?.countedCashPaisa ?? null
+
+  // Check for stale unclosed shift from an earlier day
+  const staleShift = useMemo(() => {
+    if (!data?.shifts) return null
+    const openShifts = data.shifts.filter(s => s.status === 'open')
+    const today = new Date().toISOString().split('T')[0]
+    return openShifts.find(s => s.openedAt.split('T')[0] < today) ?? null
+  }, [data?.shifts])
+
+  // Counters management: Supports 1-10 out of the box + any custom or historically used counters
+  const availableCounters = useMemo(() => {
+    const list = [
+      'Counter 1',
+      'Counter 2',
+      'Counter 3',
+      'Counter 4',
+      'Counter 5',
+      'Counter 6',
+      'Counter 7',
+      'Counter 8',
+      'Counter 9',
+      'Counter 10',
+    ]
+    if (data?.shifts) {
+      for (const s of data.shifts) {
+        if (s.counterId && !list.includes(s.counterId)) {
+          list.push(s.counterId)
+        }
+      }
+    }
+    return list
+  }, [data?.shifts])
+
+  const openCounters = useMemo(() => {
+    return new Set(data?.shifts?.filter(s => s.status === 'open').map(s => s.counterId || 'Counter 1') ?? [])
+  }, [data?.shifts])
+
+  const targetCounter = selectedCounterOption === '__custom__'
+    ? (customCounterName.trim() || 'Custom Counter')
+    : selectedCounterOption
 
   return (
     <PageShell
@@ -170,13 +279,22 @@ export default function CashShiftsPage(props: PageProps) {
             {!shift ? (
               <button
                 type="button"
+                disabled={Boolean(staleShift && session?.role === 'Cashier')}
+                title={staleShift && session?.role === 'Cashier' ? 'Previous shift not closed. A manager must force-close it first.' : undefined}
                 onClick={() => {
-                  setOpening('5000')
+                  setOpening('')
+                  setSelectedCounterOption('Counter 1')
+                  setCustomCounterName('')
+                  setOpenNote('')
+                  setInlineError('')
+                  setShowDenominations(false)
+                  setDenominations(defaultDenominations)
                   setShowOpenModal(true)
                 }}
-                className="medkit-btn-primary"
+                className={`medkit-btn-primary ${staleShift && session?.role === 'Cashier' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                style={{ color: '#ffffff' }}
               >
-                <span>+</span> Open New Shift
+                <span style={{ color: '#ffffff' }}>+</span> <span style={{ color: '#ffffff' }}>Open New Shift</span>
               </button>
             ) : (
               <button
@@ -193,6 +311,39 @@ export default function CashShiftsPage(props: PageProps) {
             )}
           </div>
         </div>
+
+        {/* Warning Banner for unclosed previous shift */}
+        {staleShift && (
+          <div className="mb-5 p-4 px-5 rounded-2xl bg-amber-50 border border-amber-300 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <h3 className="text-sm font-bold text-amber-950 font-heading">Previous shift not closed</h3>
+                <p className="text-xs text-amber-800">
+                  Shift #{staleShift.id} was opened on {new Date(staleShift.openedAt).toLocaleDateString()} at{' '}
+                  {new Date(staleShift.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} by {staleShift.cashierName} ({staleShift.counterId || 'Counter 1'}) and was never closed.
+                </p>
+              </div>
+            </div>
+            {(session?.role === 'Owner' || session?.role === 'Manager') ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setForceCloseShiftId(staleShift.id)
+                  setForceCloseReason('')
+                  setShowForceCloseModal(true)
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow transition-all cursor-pointer"
+              >
+                Force Close Shift
+              </button>
+            ) : (
+              <span className="text-xs text-amber-900 font-semibold bg-amber-100 px-3 py-1.5 rounded-lg">
+                Manager force-close required
+              </span>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-sm font-medium">
@@ -214,9 +365,9 @@ export default function CashShiftsPage(props: PageProps) {
             </div>
             <div className="medkit-stat-body">
               <div className="medkit-stat-label">Opening Cash</div>
-              <div className="medkit-stat-value">{money(openingCashPaisa)}</div>
+              <div className="medkit-stat-value">{shift ? money(openingCashPaisa) : 'Rs. 0'}</div>
               <div className="medkit-stat-meta">
-                <span>Current Shift</span>
+                <span>{shift ? 'Current Shift' : 'No active shift'}</span>
               </div>
             </div>
           </div>
@@ -228,9 +379,9 @@ export default function CashShiftsPage(props: PageProps) {
             </div>
             <div className="medkit-stat-body">
               <div className="medkit-stat-label">Cash Sales</div>
-              <div className="medkit-stat-value">{money(cashSalesPaisa)}</div>
+              <div className="medkit-stat-value">{shift ? money(cashSalesPaisa) : 'Rs. 0'}</div>
               <div className="medkit-stat-meta">
-                <span>Today</span>
+                <span>{shift ? 'Current Shift' : 'No active shift'}</span>
               </div>
             </div>
           </div>
@@ -242,9 +393,9 @@ export default function CashShiftsPage(props: PageProps) {
             </div>
             <div className="medkit-stat-body">
               <div className="medkit-stat-label">Cash Received</div>
-              <div className="medkit-stat-value">{money(cashReceivedPaisa)}</div>
+              <div className="medkit-stat-value">{shift ? money(cashReceivedPaisa) : 'Rs. 0'}</div>
               <div className="medkit-stat-meta">
-                <span>Customer Payments</span>
+                <span>{shift ? 'Customer Payments' : 'No active shift'}</span>
               </div>
             </div>
           </div>
@@ -256,9 +407,9 @@ export default function CashShiftsPage(props: PageProps) {
             </div>
             <div className="medkit-stat-body">
               <div className="medkit-stat-label">Cash Expenses</div>
-              <div className="medkit-stat-value">{money(cashExpensesPaisa)}</div>
+              <div className="medkit-stat-value">{shift ? money(cashExpensesPaisa) : 'Rs. 0'}</div>
               <div className="medkit-stat-meta">
-                <span>Today</span>
+                <span>{shift ? 'Current Shift' : 'No active shift'}</span>
               </div>
             </div>
           </div>
@@ -376,7 +527,9 @@ export default function CashShiftsPage(props: PageProps) {
                                 {row.type.replace('_', ' ')}
                               </span>
                             </td>
-                            <td className="text-xs text-slate-600">{row.reference || row.note || '-'}</td>
+                            <td className="text-xs text-slate-600 max-w-[160px] truncate" title={row.reference || row.note || '-'}>
+                              {row.reference && row.reference.startsWith('shift-') ? 'Opening Float' : (row.reference || row.note || '-')}
+                            </td>
                             <td className="font-bold text-xs">
                               <span className={isIncome ? 'text-emerald-600' : 'text-rose-600'}>
                                 {isIncome ? '+' : '-'} {money(row.amountPaisa)}
@@ -427,11 +580,12 @@ export default function CashShiftsPage(props: PageProps) {
                       <tr>
                         <th>Opened</th>
                         <th>Cashier</th>
+                        <th>Counter</th>
                         <th>Status</th>
                         <th>Expected</th>
                         <th>Counted</th>
                         <th>Difference</th>
-                        <th>Closing Note</th>
+                        <th>Note</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -439,6 +593,7 @@ export default function CashShiftsPage(props: PageProps) {
                         <tr key={s.id}>
                           <td className="text-xs">{new Date(s.openedAt).toLocaleString()}</td>
                           <td className="font-semibold text-xs text-slate-800">{s.cashierName}</td>
+                          <td className="text-xs text-slate-600 font-medium">{s.counterId || 'Counter 1'}</td>
                           <td>
                             <span className={`medkit-status-pill ${s.status === 'open' ? 'active' : 'inactive'}`}>
                               {s.status}
@@ -457,12 +612,14 @@ export default function CashShiftsPage(props: PageProps) {
                               '-'
                             )}
                           </td>
-                          <td className="text-xs text-slate-500">{s.closingNote || '-'}</td>
+                          <td className="text-xs text-slate-500 max-w-[160px] truncate" title={s.closingNote || s.note || s.closeReason || '-'}>
+                            {s.closingNote || s.note || s.closeReason || '-'}
+                          </td>
                         </tr>
                       ))}
                       {(!data?.shifts || data.shifts.length === 0) && (
                         <tr>
-                          <td colSpan={7} className="py-6 text-center text-slate-400 text-sm">
+                          <td colSpan={8} className="py-6 text-center text-slate-400 text-sm">
                             No shifts recorded yet.
                           </td>
                         </tr>
@@ -500,7 +657,9 @@ export default function CashShiftsPage(props: PageProps) {
                               {m.direction === 'in' ? '+' : '-'} {money(m.amountPaisa)}
                             </span>
                           </td>
-                          <td className="text-xs text-slate-600">{m.reference || m.note || '-'}</td>
+                          <td className="text-xs text-slate-600 max-w-[200px] truncate" title={m.reference || m.note || '-'}>
+                            {m.reference && m.reference.startsWith('shift-') ? 'Opening Float' : (m.reference || m.note || '-')}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -511,7 +670,7 @@ export default function CashShiftsPage(props: PageProps) {
           </div>
 
           {/* Right Column Inspector (~35% width) */}
-          <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-5 min-w-0">
             {/* Shift Actions Card */}
             <div className="medkit-card">
               <div className="medkit-card-header">
@@ -540,13 +699,22 @@ export default function CashShiftsPage(props: PageProps) {
                 ) : (
                   <button
                     type="button"
+                    disabled={Boolean(staleShift && session?.role === 'Cashier')}
+                    title={staleShift && session?.role === 'Cashier' ? 'Previous shift not closed. A manager must force-close it first.' : undefined}
                     onClick={() => {
-                      setOpening('5000')
+                      setOpening('')
+                      setSelectedCounterOption('Counter 1')
+                      setCustomCounterName('')
+                      setOpenNote('')
+                      setInlineError('')
+                      setShowDenominations(false)
+                      setDenominations(defaultDenominations)
                       setShowOpenModal(true)
                     }}
-                    className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-[#7A35F6] to-[#5E0CF3] hover:from-[#6c28ea] hover:to-[#5009d4] text-white font-bold text-sm shadow-md transition-all cursor-pointer"
+                    className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-[#7A35F6] to-[#5E0CF3] hover:from-[#6c28ea] hover:to-[#5009d4] !text-white font-bold text-sm shadow-md transition-all cursor-pointer ${staleShift && session?.role === 'Cashier' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    style={{ color: '#ffffff' }}
                   >
-                    <span>▶</span> Open New Shift
+                    <span style={{ color: '#ffffff' }}>▶</span> <span style={{ color: '#ffffff' }}>Open New Shift</span>
                   </button>
                 )}
 
@@ -609,59 +777,71 @@ export default function CashShiftsPage(props: PageProps) {
                 <h2>Current Shift Summary</h2>
               </div>
               <div className="medkit-card-body text-xs space-y-2.5">
-                <div className="flex justify-between items-center text-slate-600">
-                  <span>Opening Cash</span>
-                  <span className="font-semibold text-slate-900">{money(openingCashPaisa)}</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-600">
-                  <span>Cash Sales</span>
-                  <span className="font-semibold text-slate-900">{money(cashSalesPaisa)}</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-600">
-                  <span>Cash Returns</span>
-                  <span className="font-semibold text-slate-900">Rs. 0</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-600">
-                  <span>Customer Payments</span>
-                  <span className="font-semibold text-slate-900">{money(cashReceivedPaisa)}</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-600">
-                  <span>Expenses</span>
-                  <span className="font-semibold text-rose-600">- {money(cashExpensesPaisa)}</span>
-                </div>
-
-                <div className="pt-2 border-t border-slate-100">
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-slate-800">Expected Closing Cash</span>
-                    <span className="font-bold text-sm text-slate-900 font-heading">
-                      {money(expectedClosingPaisa)}
-                    </span>
+                {!shift ? (
+                  <div className="py-6 text-center text-slate-400">
+                    <div className="text-2xl mb-1">🔒</div>
+                    <p className="font-semibold text-slate-700 text-xs mb-1">No Active Shift</p>
+                    <p className="text-[11px] text-slate-500">
+                      Open a cash shift to start tracking live drawer cash, sales and expenses.
+                    </p>
                   </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Opening Cash</span>
+                      <span className="font-semibold text-slate-900">{money(openingCashPaisa)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Cash Sales</span>
+                      <span className="font-semibold text-slate-900">{money(cashSalesPaisa)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Cash Returns</span>
+                      <span className="font-semibold text-slate-900">Rs. 0</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Customer Payments</span>
+                      <span className="font-semibold text-slate-900">{money(cashReceivedPaisa)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Expenses</span>
+                      <span className="font-semibold text-rose-600">- {money(cashExpensesPaisa)}</span>
+                    </div>
 
-                <div className="pt-2">
-                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                    Actual Closing Cash
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">Rs.</span>
-                    <input
-                      type="text"
-                      className="medkit-select w-full py-1.5 px-3 text-xs font-mono font-bold"
-                      value={counted !== '' ? counted : (expectedClosingPaisa / 100).toFixed(0)}
-                      onChange={e => setCounted(e.target.value)}
-                    />
-                  </div>
-                </div>
+                    <div className="pt-2 border-t border-slate-100">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-slate-800">Expected Closing Cash</span>
+                        <span className="font-bold text-sm text-slate-900 font-heading">
+                          {money(expectedClosingPaisa)}
+                        </span>
+                      </div>
+                    </div>
 
-                <div className="pt-2">
-                  <div className="flex items-center justify-between p-2 px-3 rounded-xl bg-emerald-50 border border-emerald-100">
-                    <span className="text-xs font-bold text-emerald-800">Difference</span>
-                    <span className="text-xs font-bold text-emerald-800">
-                      {differencePaisa === 0 ? 'Rs. 0' : money(differencePaisa)}
-                    </span>
-                  </div>
-                </div>
+                    <div className="pt-2">
+                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                        Actual Closing Cash
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">Rs.</span>
+                        <input
+                          type="text"
+                          className="medkit-select w-full py-1.5 px-3 text-xs font-mono font-bold"
+                          value={counted !== '' ? counted : (expectedClosingPaisa / 100).toFixed(0)}
+                          onChange={e => setCounted(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
+                      <div className="flex items-center justify-between p-2 px-3 rounded-xl bg-emerald-50 border border-emerald-100">
+                        <span className="text-xs font-bold text-emerald-800">Difference</span>
+                        <span className="text-xs font-bold text-emerald-800">
+                          {differencePaisa === 0 ? 'Rs. 0' : money(differencePaisa)}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -754,7 +934,7 @@ export default function CashShiftsPage(props: PageProps) {
         {/* Modal: Open Shift */}
         {showOpenModal && (
           <div className="medkit-modal-backdrop" onClick={() => setShowOpenModal(false)}>
-            <div className="medkit-modal" onClick={e => e.stopPropagation()}>
+            <div className="medkit-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
               <div className="medkit-modal-header">
                 <h2>Open New Cash Shift</h2>
                 <button
@@ -768,31 +948,206 @@ export default function CashShiftsPage(props: PageProps) {
               <form
                 onSubmit={e => {
                   e.preventDefault()
+                  const trimmed = opening.trim()
+                  if (!trimmed) {
+                    setInlineError('Opening cash float is required.')
+                    return
+                  }
+                  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
+                    setInlineError('Enter a valid positive number with at most 2 decimal places.')
+                    return
+                  }
+                  const num = Number(trimmed)
+                  if (isNaN(num) || num < 0) {
+                    setInlineError('Float cannot be negative.')
+                    return
+                  }
+                  if (selectedCounterOption === '__custom__' && !customCounterName.trim()) {
+                    setInlineError('Enter a custom counter name or choose a counter from the list.')
+                    return
+                  }
+                  setInlineError('')
                   void run(async () => {
-                    const value = amount(opening)
-                    const request = { branchId, openingCashPaisa: value }
-                    await window.vertexia!.pos.openShift(branchId, value, openOperation.idFor(request))
+                    const value = Math.round(num * 100)
+                    const finalCounter = targetCounter
+                    const request = { branchId, openingCashPaisa: value, note: openNote, counterId: finalCounter }
+                    await window.vertexia!.pos.openShift(branchId, value, openOperation.idFor(request), openNote, finalCounter)
                     openOperation.reset()
                     setShowOpenModal(false)
-                    setNotice('Shift opened successfully. You can now record cash sales.')
+                    setNotice(`Shift on ${finalCounter} opened successfully. You can now record sales.`)
                   })
                 }}
               >
-                <div className="medkit-modal-body">
+                <div className="medkit-modal-body space-y-4">
+                  {/* Cashier (Read-only) & Counter */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="medkit-form-group">
+                      <label>Cashier</label>
+                      <input
+                        type="text"
+                        readOnly
+                        disabled
+                        value={session?.name || 'Cashier'}
+                        className="bg-slate-100 text-slate-700 font-semibold cursor-not-allowed"
+                      />
+                    </div>
+                    <div className="medkit-form-group">
+                      <label>Counter / Register</label>
+                      <select
+                        value={selectedCounterOption}
+                        onChange={e => {
+                          setSelectedCounterOption(e.target.value)
+                          if (e.target.value !== '__custom__') {
+                            setCustomCounterName('')
+                          }
+                        }}
+                        className="medkit-select"
+                      >
+                        {availableCounters.map(c => (
+                          <option key={c} value={c}>
+                            {c}{openCounters.has(c) ? ' (In Use)' : ''}
+                          </option>
+                        ))}
+                        <option value="__custom__">+ Add Custom Counter…</option>
+                      </select>
+                      {selectedCounterOption === '__custom__' && (
+                        <input
+                          type="text"
+                          autoFocus
+                          required
+                          value={customCounterName}
+                          onChange={e => setCustomCounterName(e.target.value)}
+                          placeholder="e.g. Counter 4, Pharmacy, Express"
+                          className="mt-2 text-xs font-semibold py-1.5 px-3 border border-indigo-200 rounded-lg bg-indigo-50/50"
+                        />
+                      )}
+                      {openCounters.has(targetCounter) && (
+                        <div className="text-[11px] text-rose-600 font-semibold mt-1">
+                          ⚠️ {targetCounter} is currently in use by another shift.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Float Input */}
                   <div className="medkit-form-group">
                     <label>Opening Cash Float (Rs) *</label>
-                    <input
-                      required
-                      inputMode="decimal"
-                      value={opening}
-                      onChange={e => setOpening(e.target.value)}
-                      placeholder="e.g. 5000"
+                    <div className="relative">
+                      <input
+                        autoFocus
+                        required
+                        inputMode="decimal"
+                        value={opening}
+                        onChange={e => {
+                          const val = e.target.value
+                          if (val === '' || /^\d*(\.\d{0,2})?$/.test(val)) {
+                            setOpening(val)
+                            setInlineError('')
+                          }
+                        }}
+                        placeholder="0.00"
+                        className={inlineError ? 'border-rose-500' : ''}
+                      />
+                    </div>
+
+                    {/* Hint: Last shift closing cash */}
+                    {lastClosingCashPaisa !== null && (
+                      <div className="text-[11.5px] text-slate-500 mt-1">
+                        Last shift closing cash: <strong className="text-slate-800">{money(lastClosingCashPaisa)}</strong>
+                      </div>
+                    )}
+
+                    {/* Soft warning: Differs from last closing cash */}
+                    {lastClosingCashPaisa !== null && opening.trim() !== '' && !isNaN(Number(opening)) && Math.round(Number(opening) * 100) !== lastClosingCashPaisa && (
+                      <div className="text-[11.5px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-1.5 px-2.5 mt-1.5 flex items-center gap-1.5 font-medium">
+                        <span>ℹ️</span>
+                        <span>Differs from last closing ({money(lastClosingCashPaisa)})</span>
+                      </div>
+                    )}
+
+                    {/* Inline error */}
+                    {inlineError && (
+                      <div className="text-[11.5px] text-rose-600 font-medium mt-1">
+                        {inlineError}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Collapsible Section: Count by notes */}
+                  <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
+                    <button
+                      type="button"
+                      onClick={() => setShowDenominations(!showDenominations)}
+                      className="text-xs font-bold text-[#5E0CF3] flex items-center justify-between w-full hover:underline"
+                    >
+                      <span>{showDenominations ? '▾ Hide Note Breakdown' : '▸ Count by notes (Denomination Calculator)'}</span>
+                      <span className="text-[11px] font-normal text-slate-500">
+                        {showDenominations ? 'Collapse' : 'Expand note counter'}
+                      </span>
+                    </button>
+
+                    {showDenominations && (
+                      <div className="mt-3 pt-3 border-t border-slate-200 space-y-2.5">
+                        <div className="grid grid-cols-4 gap-2 text-xs">
+                          {([5000, 1000, 500, 100, 50, 20, 10] as const).map(denom => (
+                            <div key={denom} className="flex flex-col">
+                              <label className="text-[10px] font-semibold text-slate-600 mb-0.5">Rs. {denom}</label>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={denominations[denom] || ''}
+                                onChange={e => {
+                                  const count = Math.max(0, parseInt(e.target.value) || 0)
+                                  const next: DenominationCounts = { ...denominations, [denom]: count }
+                                  setDenominations(next)
+                                  const sum = computeDenominationsTotal(next)
+                                  setOpening(sum > 0 ? String(sum) : '')
+                                  setInlineError('')
+                                }}
+                                placeholder="0"
+                                className="medkit-select py-1 px-2 text-xs text-center font-mono"
+                              />
+                            </div>
+                          ))}
+                          <div className="flex flex-col">
+                            <label className="text-[10px] font-semibold text-slate-600 mb-0.5">Coins (Rs)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={denominations.coins || ''}
+                              onChange={e => {
+                                const count = Math.max(0, parseInt(e.target.value) || 0)
+                                const next: DenominationCounts = { ...denominations, coins: count }
+                                setDenominations(next)
+                                const sum = computeDenominationsTotal(next)
+                                setOpening(sum > 0 ? String(sum) : '')
+                                setInlineError('')
+                              }}
+                              placeholder="0"
+                              className="medkit-select py-1 px-2 text-xs text-center font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Optional Note */}
+                  <div className="medkit-form-group">
+                    <label>Shift Note (optional)</label>
+                    <textarea
+                      rows={2}
+                      maxLength={200}
+                      value={openNote}
+                      onChange={e => setOpenNote(e.target.value)}
+                      placeholder="e.g. Morning shift, primary cashier"
+                      className="text-xs"
                     />
-                    <small className="text-slate-400 text-[11px] mt-1 block">
-                      Initial cash balance placed into the drawer at shift start.
-                    </small>
                   </div>
                 </div>
+
                 <div className="medkit-modal-footer">
                   <button
                     type="button"
@@ -801,8 +1156,86 @@ export default function CashShiftsPage(props: PageProps) {
                   >
                     Cancel
                   </button>
-                  <button type="submit" disabled={busy} className="medkit-btn-primary">
-                    Open Shift
+                  <button
+                    type="submit"
+                    disabled={busy || !opening.trim()}
+                    className="medkit-btn-primary"
+                    style={{ color: '#ffffff' }}
+                  >
+                    <span style={{ color: '#ffffff' }}>{busy ? 'Opening Shift…' : 'Open Shift'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Force Close Shift (Manager/Admin Only) */}
+        {showForceCloseModal && forceCloseShiftId && (
+          <div className="medkit-modal-backdrop" onClick={() => setShowForceCloseModal(false)}>
+            <div className="medkit-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+              <div className="medkit-modal-header">
+                <h2 className="text-amber-900">⚠️ Force Close Previous Shift</h2>
+                <button
+                  type="button"
+                  onClick={() => setShowForceCloseModal(false)}
+                  className="text-slate-400 hover:text-slate-700 text-lg leading-none"
+                >
+                  ✕
+                </button>
+              </div>
+              <form
+                onSubmit={e => {
+                  e.preventDefault()
+                  if (!forceCloseReason.trim() || forceCloseReason.trim().length < 3) return
+                  void run(async () => {
+                    await window.vertexia!.cash.forceClose({
+                      branchId,
+                      shiftId: forceCloseShiftId,
+                      reason: forceCloseReason.trim(),
+                    })
+                    setShowForceCloseModal(false)
+                    setForceCloseShiftId(null)
+                    setForceCloseReason('')
+                    setNotice('Abandoned shift force-closed successfully. You can now open a new shift.')
+                  })
+                }}
+              >
+                <div className="medkit-modal-body space-y-3">
+                  <p className="text-xs text-slate-600">
+                    This shift was left open from an earlier date. As a manager or owner, enter a reason to reconcile and force-close it so the counter is cleared.
+                  </p>
+                  <div className="medkit-form-group">
+                    <label>Force Close Reason *</label>
+                    <textarea
+                      required
+                      rows={3}
+                      minLength={3}
+                      maxLength={500}
+                      value={forceCloseReason}
+                      onChange={e => setForceCloseReason(e.target.value)}
+                      placeholder="e.g. Cashier forgot to close shift yesterday. Drawer reconciled with manager."
+                      className="text-xs"
+                    />
+                    <small className="text-slate-400 text-[11px] mt-1 block">
+                      Minimum 3 characters. This action is permanently logged to the audit events.
+                    </small>
+                  </div>
+                </div>
+                <div className="medkit-modal-footer">
+                  <button
+                    type="button"
+                    onClick={() => setShowForceCloseModal(false)}
+                    className="medkit-btn-secondary"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={busy || forceCloseReason.trim().length < 3}
+                    className="medkit-btn-primary bg-amber-600 hover:bg-amber-700"
+                  >
+                    {busy ? 'Closing…' : 'Confirm Force Close'}
                   </button>
                 </div>
               </form>

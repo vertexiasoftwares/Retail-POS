@@ -158,7 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value: AuthValue = {
     session,
     can: permission => Boolean(session?.permissions.includes(permission)),
-    canPage: page => canAccessPage(page, session?.permissions ?? []),
+    canPage: page => canAccessPage(page, session?.permissions ?? [], session?.allowedTabs),
     acceptSession,
     logout: async () => {
       await window.vertexia!.auth.logout()
@@ -197,7 +197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         <RegisterPage
           onSuccess={() => {
             void refresh()
-            setView('activate')
+            setView('login')
           }}
           onNavigateToLogin={() => setView('login')}
           onNavigateToActivate={() => setView('activate')}

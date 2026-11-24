@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { isUserRole, rolePermissions } from '../../src/shared/auth-policy.js';
+import { getRequestContext } from './context.mjs';
 const HASH_OPTIONS = { N: 131072, r: 8, p: 1, maxmem: 160 * 1024 * 1024 };
 const dummyHash = `scrypt-v1$${'00'.repeat(16)}$${'00'.repeat(64)}`;
 const IDLE_MS = 30 * 60 * 1000;
@@ -107,6 +108,15 @@ export class AuthRepository {
         if (touch) {
             record.touchedAt = time;
         }
+        let allowedTabs = undefined;
+        if (user.allowed_tabs && typeof user.allowed_tabs === 'string') {
+            try {
+                const parsed = JSON.parse(user.allowed_tabs);
+                if (Array.isArray(parsed))
+                    allowedTabs = parsed;
+            }
+            catch { }
+        }
         return {
             userId: record.userId,
             name: String(user.name),
@@ -117,6 +127,7 @@ export class AuthRepository {
             branches,
             branchId: record.branchId,
             permissions: [...rolePermissions[user.role]],
+            allowedTabs,
             mustChangePassword: Number(user.must_change_password) === 1,
         };
     }
@@ -128,11 +139,13 @@ export class AuthRepository {
         return { userId, version: Number(user.credential_version), branchId: String(user.branch_id), issuedAt: time, touchedAt: time };
     }
     status(token) {
-        return { needsSetup: !this.db.prepare("SELECT 1 FROM app_meta WHERE key='auth_setup_complete'").get(), businessName: String(this.business().name), session: this.current(token) };
+        const effectiveToken = token || getRequestContext()?.sessionToken;
+        return { needsSetup: !this.db.prepare("SELECT 1 FROM app_meta WHERE key='auth_setup_complete'").get(), businessName: String(this.business().name), session: this.current(effectiveToken) };
     }
     current(token) {
-        if (token) {
-            return this.authenticateToken(token, false);
+        const effectiveToken = token || getRequestContext()?.sessionToken;
+        if (effectiveToken) {
+            return this.authenticateToken(effectiveToken, false);
         }
         return this.validateSessionRecord(this.desktopSession, () => { this.desktopSession = null; }, false);
     }
@@ -150,7 +163,8 @@ export class AuthRepository {
         return session;
     }
     require(permission, branchId, allowPasswordChange = false, touchSession = true, token) {
-        const session = token ? this.authenticateToken(token, touchSession) : this.validateSessionRecord(this.desktopSession, () => { this.desktopSession = null; }, touchSession);
+        const effectiveToken = token || getRequestContext()?.sessionToken;
+        const session = effectiveToken ? this.authenticateToken(effectiveToken, touchSession) : this.validateSessionRecord(this.desktopSession, () => { this.desktopSession = null; }, touchSession);
         if (!session)
             throw new Error('Session expired. Sign in again.');
         if (session.mustChangePassword && !allowPasswordChange)
@@ -331,7 +345,28 @@ export class AuthRepository {
     }
     listUsers() {
         const session = this.require('users.manage');
-        return this.db.prepare('SELECT u.id,u.name,u.role,u.is_active,c.username,c.must_change_password FROM users u LEFT JOIN user_credentials c ON c.user_id=u.id WHERE u.business_id=? ORDER BY u.name').all(session.businessId).map(row => ({ id: String(row.id), name: String(row.name), role: String(row.role), isActive: Number(row.is_active) === 1, username: row.username === null ? null : String(row.username), hasLogin: row.username !== null, mustChangePassword: Number(row.must_change_password) === 1, branchIds: this.db.prepare('SELECT branch_id FROM user_branches WHERE user_id=?').all(String(row.id)).map(branch => String(branch.branch_id)) }));
+        return this.db.prepare('SELECT u.id,u.name,u.role,u.is_active,u.allowed_tabs,c.username,c.must_change_password FROM users u LEFT JOIN user_credentials c ON c.user_id=u.id WHERE u.business_id=? ORDER BY u.name').all(session.businessId).map(row => {
+            let allowedTabs = undefined;
+            if (row.allowed_tabs && typeof row.allowed_tabs === 'string') {
+                try {
+                    const parsed = JSON.parse(row.allowed_tabs);
+                    if (Array.isArray(parsed))
+                        allowedTabs = parsed;
+                }
+                catch { }
+            }
+            return {
+                id: String(row.id),
+                name: String(row.name),
+                role: String(row.role),
+                isActive: Number(row.is_active) === 1,
+                username: row.username === null ? null : String(row.username),
+                hasLogin: row.username !== null,
+                mustChangePassword: Number(row.must_change_password) === 1,
+                allowedTabs,
+                branchIds: this.db.prepare('SELECT branch_id FROM user_branches WHERE user_id=?').all(String(row.id)).map(branch => String(branch.branch_id)),
+            };
+        });
     }
     validateBranches(values, businessId) {
         if (!Array.isArray(values) || !values.length || values.length > 100 || new Set(values).size !== values.length)
@@ -344,15 +379,17 @@ export class AuthRepository {
         });
     }
     unchangedSession(original, token) {
-        const current = token ? this.sessions.get(this.hashToken(token)) : this.desktopSession;
+        const effectiveToken = token || getRequestContext()?.sessionToken;
+        const current = effectiveToken ? this.sessions.get(this.hashToken(effectiveToken)) : this.desktopSession;
         if (current !== original)
             throw new Error('Session changed. Try this action again.');
     }
     createUser(input) {
         return this.serial(async () => {
             this.authorizeWrite('auth:create-user');
-            const session = this.require('users.manage');
-            const original = this.desktopSession;
+            const effectiveToken = getRequestContext()?.sessionToken;
+            const session = this.require('users.manage', undefined, false, true, effectiveToken);
+            const original = effectiveToken ? this.sessions.get(this.hashToken(effectiveToken)) : this.desktopSession;
             const name = text(input?.name, 'staff name');
             const login = username(input?.username);
             if (!isUserRole(input?.role))
@@ -361,13 +398,14 @@ export class AuthRepository {
             if (this.db.prepare('SELECT 1 FROM user_credentials WHERE username=?').get(login))
                 throw new Error('This username is already in use.');
             const hash = await hashPassword(password(input.password, true));
-            this.unchangedSession(original);
-            this.require('users.manage');
+            this.unchangedSession(original, effectiveToken);
+            this.require('users.manage', undefined, false, true, effectiveToken);
+            const allowedTabsJson = input.allowedTabs && Array.isArray(input.allowedTabs) ? JSON.stringify(input.allowedTabs) : null;
             return this.transaction(() => {
                 this.authorizeWrite('auth:create-user');
                 this.validateBranches(branches, session.businessId);
                 const id = `user-${randomUUID()}`, time = this.now().toISOString();
-                this.db.prepare('INSERT INTO users VALUES (?,?,?,?,?,?)').run(id, session.businessId, name, input.role, 1, time);
+                this.db.prepare('INSERT INTO users(id,business_id,name,role,is_active,created_at,allowed_tabs) VALUES (?,?,?,?,?,?,?)').run(id, session.businessId, name, input.role, 1, time, allowedTabsJson);
                 this.db.prepare('INSERT INTO user_credentials(user_id,username,password_hash,must_change_password,updated_at) VALUES (?,?,?,1,?)').run(id, login, hash, time);
                 for (const branch of branches)
                     this.db.prepare('INSERT INTO user_branches VALUES (?,?)').run(id, branch);
@@ -377,7 +415,8 @@ export class AuthRepository {
         });
     }
     updateUser(input) {
-        const session = this.require('users.manage');
+        const effectiveToken = getRequestContext()?.sessionToken;
+        const session = this.require('users.manage', undefined, false, true, effectiveToken);
         if (!input || !isUserRole(input.role) || typeof input.isActive !== 'boolean')
             throw new Error('Invalid staff update.');
         if (input.userId === session.userId)
@@ -388,13 +427,14 @@ export class AuthRepository {
         if (input.isActive && !user.login_id)
             throw new Error('Legacy staff has no login. Create a new staff account.');
         const branches = this.validateBranches(input.branchIds, session.businessId);
+        const allowedTabsJson = input.allowedTabs && Array.isArray(input.allowedTabs) ? JSON.stringify(input.allowedTabs) : null;
         return this.transaction(() => {
             if (user.role === 'Owner' && (input.role !== 'Owner' || !input.isActive)) {
                 const others = this.db.prepare("SELECT 1 FROM users u JOIN user_credentials c ON c.user_id=u.id JOIN user_branches ub ON ub.user_id=u.id JOIN branches b ON b.id=ub.branch_id WHERE u.business_id=? AND u.id<>? AND u.role='Owner' AND u.is_active=1 AND b.is_active=1 LIMIT 1").get(session.businessId, input.userId);
                 if (!others)
                     throw new Error('The last active owner cannot be removed.');
             }
-            this.db.prepare('UPDATE users SET role=?,is_active=? WHERE id=?').run(input.role, input.isActive ? 1 : 0, input.userId);
+            this.db.prepare('UPDATE users SET role=?,is_active=?,allowed_tabs=? WHERE id=?').run(input.role, input.isActive ? 1 : 0, allowedTabsJson, input.userId);
             this.db.prepare('UPDATE user_credentials SET credential_version=credential_version+1 WHERE user_id=?').run(input.userId);
             this.db.prepare('DELETE FROM user_branches WHERE user_id=?').run(input.userId);
             for (const branch of branches)
@@ -406,14 +446,16 @@ export class AuthRepository {
     resetPassword(userId, newPassword) {
         return this.serial(async () => {
             this.authorizeWrite('auth:reset-password');
-            const session = this.require('users.manage'), original = this.desktopSession;
+            const effectiveToken = getRequestContext()?.sessionToken;
+            const session = this.require('users.manage', undefined, false, true, effectiveToken);
+            const original = effectiveToken ? this.sessions.get(this.hashToken(effectiveToken)) : this.desktopSession;
             if (userId === session.userId)
                 throw new Error('Use Change Password for your own account.');
             if (!this.db.prepare('SELECT 1 FROM users u JOIN user_credentials c ON c.user_id=u.id WHERE u.id=? AND u.business_id=?').get(text(userId, 'user identifier', 100), session.businessId))
                 throw new Error('Staff login not found.');
             const hash = await hashPassword(password(newPassword, true));
-            this.unchangedSession(original);
-            this.require('users.manage');
+            this.unchangedSession(original, effectiveToken);
+            this.require('users.manage', undefined, false, true, effectiveToken);
             this.transaction(() => {
                 this.authorizeWrite('auth:reset-password');
                 this.db.prepare('UPDATE user_credentials SET password_hash=?,credential_version=credential_version+1,must_change_password=1,failed_attempts=0,locked_until=NULL,updated_at=? WHERE user_id=?').run(hash, this.now().toISOString(), userId);

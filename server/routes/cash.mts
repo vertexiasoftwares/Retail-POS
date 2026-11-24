@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { VertexiaDatabase } from '../../electron/database/database.mjs';
 import type { AuthRepository } from '../../electron/database/auth.mjs';
 import type { RealtimeSyncServer } from '../websocket.mjs';
-import type { CashCloseRequest, CashMoveRequest } from '../../src/types/recovery.js';
+import type { CashCloseRequest, CashForceCloseRequest, CashMoveRequest } from '../../src/types/recovery.js';
 import { enforceAuth, ensureOperationId } from '../auth-guard.mjs';
 
 export function registerCashRoutes(
@@ -83,6 +83,34 @@ export function registerCashRoutes(
       return result;
     } catch (err: any) {
       return reply.status(400).send({ error: 'CashMoveError', message: err?.message || 'Failed to move cash.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/cash/force-close
+  app.post('/api/cash/force-close', async (request, reply) => {
+    const body = request.body as CashForceCloseRequest | undefined;
+    if (!body || !body.branchId || !body.shiftId || !body.reason) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'branchId, shiftId, and reason are required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'cash.manage', body.branchId, true);
+    if (!guarded) return;
+
+    try {
+      const result = db.cash.forceClose(ensureOperationId(body, guarded.session.userId));
+      sync?.broadcast({
+        type: 'shift:closed',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+        payload: { shiftId: body.shiftId, forceClosed: true },
+      });
+      sync?.broadcast({
+        type: 'cash:updated',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+      });
+      return result;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'ForceCloseShiftError', message: err?.message || 'Failed to force close cash shift.', statusCode: 400 });
     }
   });
 }

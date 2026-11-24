@@ -127,10 +127,10 @@ export function Sidebar({
               isHovered ? 'opacity-100 translate-x-0 w-auto' : 'opacity-0 -translate-x-4 w-0 overflow-hidden'
             }`}
           >
-            <span className="text-base font-bold text-white tracking-tight leading-tight font-heading">
+            <span className="text-lg font-bold text-white tracking-tight leading-tight font-heading">
               Vertexia <span className="text-[#a875ff]">POS</span>
             </span>
-            <span className="text-[10.5px] font-medium text-slate-400 leading-none mt-1">
+            <span className="text-xs font-medium text-slate-400 leading-none mt-1">
               Retail Management
             </span>
           </div>
@@ -161,7 +161,7 @@ export function Sidebar({
           return (
             <div key={idx} className="space-y-1">
               <h2
-                className={`text-[10px] font-bold text-slate-400/60 mb-2 px-3 uppercase tracking-widest whitespace-nowrap transition-all duration-300 font-heading ${
+                className={`text-xs font-bold text-slate-400/70 mb-2 px-3 uppercase tracking-wider whitespace-nowrap transition-all duration-300 font-heading ${
                   isHovered ? 'opacity-100' : 'opacity-0 h-0 my-0 overflow-hidden'
                 }`}
               >
@@ -186,7 +186,7 @@ export function Sidebar({
                       <span className="flex-shrink-0 flex items-center justify-center w-6 h-6">
                         <Icon
                           name={item.icon}
-                          size={20}
+                          size={21}
                           className={`transition-transform duration-200 ${
                             isHovered ? '' : 'group-hover:scale-110'
                           } ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-white'}`}
@@ -194,7 +194,7 @@ export function Sidebar({
                       </span>
 
                       <span
-                        className={`text-sm whitespace-nowrap transition-all duration-300 origin-left ${
+                        className={`text-[15px] whitespace-nowrap transition-all duration-300 origin-left ${
                           isHovered ? 'opacity-100 translate-x-0 w-auto' : 'opacity-0 -translate-x-2 w-0 overflow-hidden'
                         }`}
                       >

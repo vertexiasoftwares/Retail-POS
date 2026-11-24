@@ -116,7 +116,15 @@ function runMigrations(db: DatabaseSync) {
     if (migration.version <= current) continue
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.exec(migration.sql)
+      const statements = migration.sql.split(';').map(s => s.trim()).filter(s => s.length > 0)
+      for (const statement of statements) {
+        try {
+          db.exec(statement + ';')
+        } catch (err: any) {
+          if (err?.message?.includes('duplicate column name')) continue
+          throw err
+        }
+      }
       db.exec(`PRAGMA user_version = ${migration.version}`)
       db.exec('COMMIT')
     } catch (error) {
@@ -167,8 +175,8 @@ function seedDatabase(db: DatabaseSync, now: Date, includeDemoData: boolean) {
   try {
     db.prepare('INSERT INTO businesses VALUES (?, ?, ?, ?, ?)').run(BUSINESS_ID, 'Noor Mart', 'PKR', 'Asia/Karachi', createdAt)
     db.prepare('INSERT INTO branches VALUES (?, ?, ?, ?, ?, ?, ?)').run(BRANCH_ID, BUSINESS_ID, 'Noor Mart', 'MAIN', 'Karachi', 1, createdAt)
-    db.prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)').run(OWNER_ID, BUSINESS_ID, 'Riyaz Ahmed', 'Owner', 1, createdAt)
-    db.prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)').run(CASHIER_ID, BUSINESS_ID, 'Ali Raza', 'Cashier', 1, createdAt)
+    db.prepare('INSERT INTO users (id, business_id, name, role, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(OWNER_ID, BUSINESS_ID, 'Riyaz Ahmed', 'Owner', 1, createdAt)
+    db.prepare('INSERT INTO users (id, business_id, name, role, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(CASHIER_ID, BUSINESS_ID, 'Ali Raza', 'Cashier', 1, createdAt)
 
     if (!includeDemoData) {
       db.prepare('INSERT INTO customers VALUES (?, ?, ?, ?, ?, ?, ?)').run('customer-walk-in', BUSINESS_ID, 'Walk-in Customer', null, 1, 1, createdAt)
@@ -197,7 +205,7 @@ function seedDatabase(db: DatabaseSync, now: Date, includeDemoData: boolean) {
     db.prepare('INSERT INTO supplier_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('supplier-opening-abc', BRANCH_ID, 'supplier-abc', 'opening_balance', 15080000, 0, 'opening-balance', createdAt)
     db.prepare('INSERT INTO supplier_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('supplier-payment-abc', BRANCH_ID, 'supplier-abc', 'payment', 0, 5880000, 'opening-payment', createdAt)
 
-    const insertSale = db.prepare('INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    const insertSale = db.prepare('INSERT INTO sales (id, business_id, branch_id, invoice_number, business_date, customer_id, cashier_id, subtotal_paisa, discount_paisa, total_paisa, cost_paisa, status, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     const insertItem = db.prepare('INSERT INTO sale_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     const insertPayment = db.prepare('INSERT INTO sale_payments VALUES (?, ?, ?, ?)')
     const insertAudit = db.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -239,7 +247,7 @@ function seedDatabase(db: DatabaseSync, now: Date, includeDemoData: boolean) {
     for (const row of expenseRows) insertExpense.run(row[0], BRANCH_ID, row[1], row[2], row[3], row[4], row[5], row[6])
 
     const shiftId = 'shift-current'
-    db.prepare('INSERT INTO cash_shifts VALUES (?, ?, ?, ?, ?, ?, ?)').run(shiftId, BRANCH_ID, CASHIER_ID, 5000000, 'open', `${today}T09:00:00+05:00`, null)
+    db.prepare('INSERT INTO cash_shifts (id, branch_id, cashier_id, opening_cash_paisa, status, opened_at, closed_at, counter_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(shiftId, BRANCH_ID, CASHIER_ID, 5000000, 'open', `${today}T09:00:00+05:00`, null, 'Counter 1', '')
     db.prepare('INSERT INTO cash_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('cash-opening', shiftId, BRANCH_ID, today, 'opening_cash', 'in', 5000000, 'Cash', shiftId, `${today}T09:00:00+05:00`)
     const cashSales = db.prepare(`SELECT s.id, s.total_paisa, s.completed_at FROM sales s JOIN sale_payments p ON p.sale_id=s.id WHERE s.business_date=? AND s.branch_id=? AND p.method='Cash'`).all(today, BRANCH_ID) as SqlRow[]
     for (const sale of cashSales) db.prepare('INSERT INTO cash_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`cash-${sale.id}`, shiftId, BRANCH_ID, today, 'cash_sale', 'in', sale.total_paisa, 'Cash', sale.id, sale.completed_at)
@@ -450,7 +458,7 @@ export class VertexiaDatabase {
       const completedAt = now.toISOString()
       const invoiceNumber = nextDocumentNumber(this.connection, request.branchId, 'sale', date)
       const saleId = `sale-${randomUUID()}`
-      this.connection.prepare('INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(saleId,String(branch.business_id),request.branchId,invoiceNumber,date,request.customerId,actorId,subtotalPaisa,discountPaisa,totalPaisa,costPaisa,'completed',completedAt)
+      this.connection.prepare('INSERT INTO sales (id, business_id, branch_id, invoice_number, business_date, customer_id, cashier_id, subtotal_paisa, discount_paisa, total_paisa, cost_paisa, status, completed_at, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(saleId,String(branch.business_id),request.branchId,invoiceNumber,date,request.customerId,actorId,subtotalPaisa,discountPaisa,totalPaisa,costPaisa,'completed',completedAt,String(shift.id))
       const insertItem = this.connection.prepare('INSERT INTO sale_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       const updateStock = this.connection.prepare('UPDATE stock_levels SET quantity_milli=quantity_milli-?,updated_at=? WHERE branch_id=? AND product_id=? AND quantity_milli>=?')
       const insertMovement = this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -503,19 +511,30 @@ export class VertexiaDatabase {
     this.connection.prepare('DELETE FROM held_sales WHERE id=?').run(id)
   }
 
-  openPosShift(branchId: string, openingCashPaisa: number, operationId?: string) {
+  openPosShift(branchId: string, openingCashPaisa: number, operationId?: string, note?: string, counterId?: string) {
     requireSafeInteger(openingCashPaisa, 'Opening cash')
     const now = this.now(), occurredAt = now.toISOString()
-    const request = { branchId, openingCashPaisa, operationId }
+    const counterClean = counterId?.trim() ? counterId.trim() : null
+    const noteClean = (note?.trim() || '')
+    const request = { branchId, openingCashPaisa, operationId, note: noteClean, counterId: counterClean }
     return postOperation(this.connection, branchId, operationId, 'shift.open', request, occurredAt, () => {
       if (!this.connection.prepare('SELECT 1 FROM branches WHERE id=? AND business_id=? AND is_active=1').get(branchId, this.businessId)) throw new Error('Branch is unavailable.')
       const actorId = this.getActorId()
+      const today = businessDate(now)
+      const staleShift = this.connection.prepare("SELECT id, opened_at FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open' AND date(opened_at, '+5 hours') < ?").get(branchId, actorId, today)
+      if (staleShift) throw new Error('Previous shift not closed. A manager must force-close it before continuing.')
+
       const existing = this.connection.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open'").get(branchId, actorId)
-      if (existing) throw new Error('A shift is already open.')
+      if (existing) throw new Error('A shift is already open. Close it first.')
+      if (counterClean) {
+        const counterExisting = this.connection.prepare("SELECT id FROM cash_shifts WHERE branch_id=? AND counter_id=? AND status='open'").get(branchId, counterClean)
+        if (counterExisting) throw new Error(`A shift is already open on ${counterClean}. Close it first.`)
+      }
+
       const shiftId = 'shift-' + randomUUID()
-      this.connection.prepare('INSERT INTO cash_shifts VALUES (?,?,?,?,?,?,?)').run(shiftId, branchId, actorId, openingCashPaisa, 'open', occurredAt, null)
+      this.connection.prepare('INSERT INTO cash_shifts (id, branch_id, cashier_id, opening_cash_paisa, status, opened_at, closed_at, counter_id, note) VALUES (?,?,?,?,?,?,?,?,?)').run(shiftId, branchId, actorId, openingCashPaisa, 'open', occurredAt, null, counterClean, noteClean)
       this.connection.prepare('INSERT INTO cash_transactions VALUES (?,?,?,?,?,?,?,?,?,?)').run('cash-' + randomUUID(), shiftId, branchId, businessDate(now), 'opening_cash', 'in', openingCashPaisa, 'Cash', shiftId, occurredAt)
-      this.connection.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run('audit-' + randomUUID(), branchId, actorId, 'Shift', 'cash_shift', shiftId, 'Cash shift opened', 'Opening paisa: ' + openingCashPaisa, occurredAt)
+      this.connection.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run('audit-' + randomUUID(), branchId, actorId, 'Shift', 'cash_shift', shiftId, 'Cash shift opened' + (noteClean ? `: ${noteClean}` : ''), `Opening paisa: ${openingCashPaisa}${counterClean ? ` on ${counterClean}` : ''}`, occurredAt)
       return shiftId
     })
   }
@@ -648,6 +667,29 @@ export class VertexiaDatabase {
     this.connection.prepare('UPDATE products SET is_active=?,updated_at=? WHERE id=?').run(status==='active'?1:0,now,id)
     this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,branchId,this.getActorId(),'Product','product',id,`Product ${status==='active'?'activated':'deactivated'}`,String(row.name),now)
     return status
+  }
+
+  deleteProduct(branchId: string, id: string): { success: boolean; archived: boolean } {
+    const row = this.connection.prepare('SELECT p.id, p.name FROM products p JOIN stock_levels sl ON sl.product_id=p.id WHERE p.id=? AND sl.branch_id=?').get(id, branchId) as SqlRow | undefined
+    if (!row) throw new Error('Product was not found.')
+
+    const now = this.now().toISOString()
+    this.connection.exec('BEGIN IMMEDIATE')
+    try {
+      this.connection.prepare('DELETE FROM sale_return_items WHERE product_id=?').run(id)
+      this.connection.prepare('DELETE FROM sale_items WHERE product_id=?').run(id)
+      this.connection.prepare('DELETE FROM purchase_items WHERE product_id=?').run(id)
+      this.connection.prepare('DELETE FROM stock_movements WHERE product_id=?').run(id)
+      this.connection.prepare('DELETE FROM stock_values WHERE product_id=?').run(id)
+      this.connection.prepare('DELETE FROM stock_levels WHERE product_id=?').run(id)
+      this.connection.prepare('DELETE FROM products WHERE id=?').run(id)
+      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`, branchId, this.getActorId(), 'Product', 'product', id, 'Product permanently deleted', String(row.name), now)
+      this.connection.exec('COMMIT')
+      return { success: true, archived: false }
+    } catch (err) {
+      this.connection.exec('ROLLBACK')
+      throw err
+    }
   }
 
   importProductsCsv(branchId: string, csv: string) {
@@ -808,7 +850,7 @@ export class VertexiaDatabase {
         if(!shift)throw new Error('Open a cash shift before issuing a cash refund.')
       }
       const returnId=`sale-return-${randomUUID()}`,returnNumber=nextDocumentNumber(this.connection,request.branchId,'return',date)
-      this.connection.prepare('INSERT INTO sale_returns VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(returnId,request.saleId,request.branchId,returnNumber,reason,paymentMethod,totalPaisa,costPaisa,actorId,occurredAt)
+      this.connection.prepare('INSERT INTO sale_returns (id, sale_id, branch_id, return_number, reason, refund_method, total_paisa, cost_paisa, created_by, occurred_at, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(returnId,request.saleId,request.branchId,returnNumber,reason,paymentMethod,totalPaisa,costPaisa,actorId,occurredAt,shift ? String(shift.id) : null)
       const insertItem=this.connection.prepare('INSERT INTO sale_return_items VALUES (?, ?, ?, ?, ?, ?, ?)')
       for(const line of lines){const movementId=`stock-${randomUUID()}`;insertItem.run(`sale-return-item-${randomUUID()}`,returnId,line.id,line.productId,line.quantityMilli,line.refundPaisa,line.costPaisa);this.connection.prepare('UPDATE stock_levels SET quantity_milli=quantity_milli+?,updated_at=? WHERE branch_id=? AND product_id=?').run(line.quantityMilli,occurredAt,request.branchId,line.productId);const stock=this.connection.prepare('SELECT quantity_milli FROM stock_levels WHERE branch_id=? AND product_id=?').get(request.branchId,line.productId) as SqlRow;this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(movementId,request.branchId,line.productId,'sale_return',line.quantityMilli,Number(stock.quantity_milli),'sale_return',returnId,returnNumber,occurredAt);changeStockValue(this.connection,request.branchId,line.productId,line.costPaisa,line.costEstimated,occurredAt,movementId)}
       if(paymentMethod==='Cash')this.connection.prepare('INSERT INTO cash_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`cash-${randomUUID()}`,String(shift!.id),request.branchId,date,'sale_refund','out',totalPaisa,'Cash',returnId,occurredAt)

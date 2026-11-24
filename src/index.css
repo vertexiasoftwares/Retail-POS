@@ -2,6 +2,13 @@
 @import "tailwindcss";
 @import "./styles/typography.css";
 
+@theme {
+  --font-heading: 'Plus Jakarta Sans', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --font-numeric: 'Plus Jakarta Sans', sans-serif;
+  --font-sans: 'DM Sans', sans-serif;
+}
+
 :root {
   font-family: var(--font-body);
   color: #10243f;
@@ -11,7 +18,7 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-weight: 400;
-  font-size: 14px;
+  font-size: 15.5px;
 }
 * {
   box-sizing: border-box;
@@ -19,6 +26,8 @@
 html {
   height: 100%;
   min-height: 100%;
+  overflow-x: hidden;
+  max-width: 100%;
 }
 body {
   margin: 0;
@@ -28,6 +37,8 @@ body {
   display: flex;
   flex-direction: column;
   font-family: var(--font-body);
+  overflow-x: hidden;
+  max-width: 100%;
 }
 #root {
   min-height: 100%;
@@ -35,6 +46,8 @@ body {
   display: flex;
   flex-direction: column;
   flex: 1;
+  overflow-x: hidden;
+  max-width: 100%;
 }
 button,
 input,

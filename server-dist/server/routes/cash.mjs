@@ -74,5 +74,33 @@ export function registerCashRoutes(app, db, auth, sync) {
             return reply.status(400).send({ error: 'CashMoveError', message: err?.message || 'Failed to move cash.', statusCode: 400 });
         }
     });
+    // POST /api/cash/force-close
+    app.post('/api/cash/force-close', async (request, reply) => {
+        const body = request.body;
+        if (!body || !body.branchId || !body.shiftId || !body.reason) {
+            return reply.status(400).send({ error: 'BadRequest', message: 'branchId, shiftId, and reason are required.', statusCode: 400 });
+        }
+        const guarded = enforceAuth(request, reply, auth, db, 'cash.manage', body.branchId, true);
+        if (!guarded)
+            return;
+        try {
+            const result = db.cash.forceClose(ensureOperationId(body, guarded.session.userId));
+            sync?.broadcast({
+                type: 'shift:closed',
+                branchId: body.branchId,
+                businessId: guarded.session.businessId,
+                payload: { shiftId: body.shiftId, forceClosed: true },
+            });
+            sync?.broadcast({
+                type: 'cash:updated',
+                branchId: body.branchId,
+                businessId: guarded.session.businessId,
+            });
+            return result;
+        }
+        catch (err) {
+            return reply.status(400).send({ error: 'ForceCloseShiftError', message: err?.message || 'Failed to force close cash shift.', statusCode: 400 });
+        }
+    });
 }
 //# sourceMappingURL=cash.mjs.map

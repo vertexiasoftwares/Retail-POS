@@ -131,12 +131,12 @@ export function registerPosRoutes(app, db, auth, sync) {
             return;
         try {
             const scopedBody = ensureOperationId(body, guarded.session.userId);
-            const shiftId = db.openPosShift(body.branchId, body.openingCashPaisa, scopedBody.operationId);
+            const shiftId = db.openPosShift(body.branchId, body.openingCashPaisa, scopedBody.operationId, body.note, body.counterId);
             sync?.broadcast({
                 type: 'shift:opened',
                 branchId: body.branchId,
                 businessId: guarded.session.businessId,
-                payload: { shiftId, cashierId: guarded.session.userId },
+                payload: { shiftId, cashierId: guarded.session.userId, counterId: body.counterId || 'Counter 1' },
             });
             return { shiftId };
         }

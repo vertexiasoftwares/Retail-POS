@@ -1,11 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../../app/auth/useAuth'
+import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { Icon } from '../../shared/ui/Icon'
 import type { BranchRecord } from '../../types/branches'
 import type { StaffUser, UserRole } from '../../types/auth'
 
 const roles: UserRole[] = ['Owner', 'Manager', 'Cashier', 'Inventory']
+
+export const ALL_SIDEBAR_TABS = [
+  'Dashboard',
+  'POS',
+  'Sales',
+  'Products',
+  'Inventory',
+  'Purchases',
+  'Customers',
+  'Suppliers',
+  'Cash & Shifts',
+  'Expenses',
+  'Staff',
+  'Reports',
+  'Settings',
+] as const
+
+const TAB_ICONS: Record<string, import('../../shared/ui/Icon').IconName> = {
+  'Dashboard': 'home',
+  'POS': 'store',
+  'Sales': 'sale',
+  'Products': 'box',
+  'Inventory': 'inventory',
+  'Purchases': 'cart',
+  'Customers': 'users',
+  'Suppliers': 'supplier',
+  'Cash & Shifts': 'cash',
+  'Expenses': 'expense',
+  'Staff': 'user',
+  'Reports': 'report',
+  'Settings': 'settings',
+}
+
+export function getDefaultTabsForRole(r: UserRole): string[] {
+  if (r === 'Owner' || r === 'Manager') {
+    return [...ALL_SIDEBAR_TABS]
+  }
+  if (r === 'Inventory') {
+    return ['Dashboard', 'Products', 'Inventory', 'Purchases', 'Suppliers']
+  }
+  return ['POS', 'Sales', 'Customers', 'Cash & Shifts']
+}
 
 const AVATAR_COLORS = [
   '#5E0CF3', '#7C3AED', '#EC4899', '#06B6D4', '#10B981',
@@ -48,6 +91,7 @@ export default function StaffPage(props: PageProps) {
   const [showAddModal, setShowAddModal] = useState(false)
   const [editing, setEditing] = useState<StaffUser | null>(null)
   const [resettingUser, setResettingUser] = useState<StaffUser | null>(null)
+  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null)
 
   // Add staff form
   const [name, setName] = useState('')
@@ -55,7 +99,15 @@ export default function StaffPage(props: PageProps) {
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<UserRole>('Cashier')
   const [branchIds, setBranchIds] = useState([session!.branchId])
+  const [allowedTabs, setAllowedTabs] = useState<string[]>(getDefaultTabsForRole('Cashier'))
   const [resetPassword, setResetPassword] = useState('')
+
+  useEscapeKey(() => {
+    setShowAddModal(false)
+    setEditing(null)
+    setResettingUser(null)
+    setOpenActionMenuId(null)
+  }, showAddModal || Boolean(editing) || Boolean(resettingUser) || Boolean(openActionMenuId))
 
   const load = async () => {
     try {
@@ -77,8 +129,7 @@ export default function StaffPage(props: PageProps) {
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0)
-    return () => window.clearTimeout(timer)
+    void load()
   }, [])
 
   const run = async (work: () => Promise<void>) => {
@@ -117,10 +168,10 @@ export default function StaffPage(props: PageProps) {
     })
   }, [users, activeTab, statusFilter, roleFilter, search])
 
-  const totalStaff = users.length || 12
-  const activeStaff = users.filter(u => u.isActive).length || 10
-  const inactiveStaff = users.filter(u => !u.isActive).length || 2
-  const adminManagers = users.filter(u => u.role === 'Owner' || u.role === 'Manager').length || 2
+  const totalStaff = users.length
+  const activeStaff = users.filter(u => u.isActive).length
+  const inactiveStaff = users.filter(u => !u.isActive).length
+  const adminManagers = users.filter(u => u.role === 'Owner' || u.role === 'Manager').length
 
   const activeBranchList = businessBranches.length
     ? businessBranches.filter(b => b.isActive)
@@ -176,6 +227,7 @@ export default function StaffPage(props: PageProps) {
                 setUsername('')
                 setPassword('')
                 setRole('Cashier')
+                setAllowedTabs(getDefaultTabsForRole('Cashier'))
                 setBranchIds([session!.branchId])
                 setShowAddModal(true)
               }}
@@ -208,8 +260,7 @@ export default function StaffPage(props: PageProps) {
               <div className="medkit-stat-label">Total Staff</div>
               <div className="medkit-stat-value">{totalStaff}</div>
               <div className="medkit-stat-meta">
-                <span className="medkit-trend-up">↑ 20%</span>
-                <span>All active and inactive staff</span>
+                <span>{totalStaff > 0 ? `${totalStaff} team members` : 'No staff added yet'}</span>
               </div>
             </div>
           </div>
@@ -223,8 +274,7 @@ export default function StaffPage(props: PageProps) {
               <div className="medkit-stat-label">Active Staff</div>
               <div className="medkit-stat-value">{activeStaff}</div>
               <div className="medkit-stat-meta">
-                <span className="medkit-trend-up">↑ 25%</span>
-                <span>Currently working</span>
+                <span>Currently active accounts</span>
               </div>
             </div>
           </div>
@@ -238,7 +288,6 @@ export default function StaffPage(props: PageProps) {
               <div className="medkit-stat-label">Inactive Staff</div>
               <div className="medkit-stat-value">{inactiveStaff}</div>
               <div className="medkit-stat-meta">
-                <span className="medkit-trend-down">↓ 0%</span>
                 <span>Disabled accounts</span>
               </div>
             </div>
@@ -253,7 +302,7 @@ export default function StaffPage(props: PageProps) {
               <div className="medkit-stat-label">Admin / Managers</div>
               <div className="medkit-stat-value">{adminManagers}</div>
               <div className="medkit-stat-meta">
-                <span>17% with full access</span>
+                <span>{adminManagers > 0 ? `${adminManagers} with manager access` : 'Standard staff'}</span>
               </div>
             </div>
           </div>
@@ -436,18 +485,75 @@ export default function StaffPage(props: PageProps) {
                             {user.isActive ? 'Active' : 'Inactive'}
                           </span>
                         </td>
-                        <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                        <td style={{ textAlign: 'center', position: 'relative', zIndex: openActionMenuId === user.id ? 60 : 1 }} onClick={e => e.stopPropagation()}>
                           <button
                             type="button"
                             onClick={() => {
                               setSelectedUser(user)
-                              setEditing(user)
+                              setOpenActionMenuId(openActionMenuId === user.id ? null : user.id)
                             }}
-                            className="text-slate-400 hover:text-slate-700"
-                            title="Edit access"
+                            className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                            title="Actions"
                           >
                             ···
                           </button>
+                          {openActionMenuId === user.id && (
+                            <div
+                              className={`absolute right-2 ${idx >= 2 || (filteredUsers.length <= 4 && idx >= 1) ? 'bottom-8' : 'top-8'} z-50 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 text-left text-xs animate-in fade-in`}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenActionMenuId(null)
+                                  setEditing({
+                                    ...user,
+                                    allowedTabs: user.allowedTabs || getDefaultTabsForRole(user.role as UserRole),
+                                  })
+                                }}
+                                className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium"
+                              >
+                                <span>✏️</span> Edit Staff & Tabs
+                              </button>
+                              {user.hasLogin && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenActionMenuId(null)
+                                    setResettingUser(user)
+                                  }}
+                                  className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium"
+                                >
+                                  <span>🔑</span> Reset Password
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenActionMenuId(null)
+                                  void run(async () => {
+                                    const result = await window.vertexia!.auth.updateUser({
+                                      userId: user.id,
+                                      role: user.role as UserRole,
+                                      isActive: !user.isActive,
+                                      branchIds: user.branchIds,
+                                      allowedTabs: user.allowedTabs,
+                                    })
+                                    setUsers(result)
+                                    setMessage(`Staff account ${user.isActive ? 'deactivated' : 'activated'} successfully.`)
+                                  })
+                                }}
+                                className={`w-full px-3 py-2 flex items-center gap-2 font-medium ${
+                                  user.isActive
+                                    ? 'text-rose-600 hover:bg-rose-50'
+                                    : 'text-emerald-600 hover:bg-emerald-50'
+                                }`}
+                              >
+                                <span>{user.isActive ? '🚫' : '✅'}</span>
+                                {user.isActive ? 'Deactivate Account' : 'Activate Account'}
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )
@@ -652,21 +758,52 @@ export default function StaffPage(props: PageProps) {
                           <span className="flex items-center gap-1.5 text-slate-600">
                             <span className="w-2 h-2 rounded-full bg-emerald-500" /> Cashier
                           </span>
-                          <span className="font-semibold text-slate-800">6 (50%)</span>
+                          <span className="font-semibold text-slate-800">
+                            {users.filter(u => u.role === 'Cashier').length} ({totalStaff > 0 ? Math.round((users.filter(u => u.role === 'Cashier').length / totalStaff) * 100) : 0}%)
+                          </span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="flex items-center gap-1.5 text-slate-600">
                             <span className="w-2 h-2 rounded-full bg-blue-500" /> Manager
                           </span>
-                          <span className="font-semibold text-slate-800">2 (17%)</span>
+                          <span className="font-semibold text-slate-800">
+                            {users.filter(u => u.role === 'Manager' || u.role === 'Owner').length} ({totalStaff > 0 ? Math.round((users.filter(u => u.role === 'Manager' || u.role === 'Owner').length / totalStaff) * 100) : 0}%)
+                          </span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="flex items-center gap-1.5 text-slate-600">
                             <span className="w-2 h-2 rounded-full bg-purple-500" /> Inventory
                           </span>
-                          <span className="font-semibold text-slate-800">2 (17%)</span>
+                          <span className="font-semibold text-slate-800">
+                            {users.filter(u => u.role === 'Inventory').length} ({totalStaff > 0 ? Math.round((users.filter(u => u.role === 'Inventory').length / totalStaff) * 100) : 0}%)
+                          </span>
                         </div>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Permitted Tabs List */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                    <div className="text-xs font-semibold text-slate-700 flex items-center justify-between">
+                      <span>Permitted Tabs</span>
+                      <span className="text-[10px] text-purple-600 font-bold">
+                        {selectedUser.allowedTabs && selectedUser.allowedTabs.length > 0
+                          ? `${selectedUser.allowedTabs.length} tabs`
+                          : 'All Tabs'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                      {(selectedUser.allowedTabs && selectedUser.allowedTabs.length > 0
+                        ? selectedUser.allowedTabs
+                        : ALL_SIDEBAR_TABS
+                      ).map(t => (
+                        <span
+                          key={t}
+                          className="px-2 py-0.5 bg-purple-50 text-[#5E0CF3] border border-purple-200 rounded-md text-[10px] font-semibold"
+                        >
+                          {t}
+                        </span>
+                      ))}
                     </div>
                   </div>
 
@@ -683,44 +820,14 @@ export default function StaffPage(props: PageProps) {
                 </div>
               </div>
             ) : (
-              <div className="medkit-card p-6 text-center text-slate-400 text-sm">
-                Select a staff member from the table to view details.
+              <div className="medkit-card p-8 text-center text-slate-400 text-sm min-h-[380px] flex flex-col items-center justify-center">
+                <div className="w-14 h-14 rounded-2xl bg-purple-50 text-[#5E0CF3] flex items-center justify-center mb-3">
+                  <Icon name="user" size={28} />
+                </div>
+                <strong className="text-slate-700 text-base mb-1">No Staff Selected</strong>
+                <span>Select a staff member from the table to view or edit their profile and permissions.</span>
               </div>
             )}
-
-            {/* Quick Actions Card */}
-            <div className="medkit-card">
-              <div className="medkit-card-header">
-                <h2>Quick Actions</h2>
-              </div>
-              <div className="medkit-card-body grid grid-cols-2 gap-2 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(true)}
-                  className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left font-semibold text-slate-700"
-                >
-                  + Add Staff
-                </button>
-                <button
-                  type="button"
-                  className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left font-semibold text-slate-700"
-                >
-                  Import Staff
-                </button>
-                <button
-                  type="button"
-                  className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left font-semibold text-slate-700"
-                >
-                  Manage Roles
-                </button>
-                <button
-                  type="button"
-                  className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left font-semibold text-slate-700"
-                >
-                  Activity Logs
-                </button>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -748,6 +855,7 @@ export default function StaffPage(props: PageProps) {
                       password,
                       role,
                       branchIds,
+                      allowedTabs,
                     })
                     setUsers(result)
                     setName('')
@@ -794,7 +902,14 @@ export default function StaffPage(props: PageProps) {
                   </div>
                   <div className="medkit-form-group">
                     <label>Role *</label>
-                    <select value={role} onChange={e => setRole(e.target.value as UserRole)}>
+                    <select
+                      value={role}
+                      onChange={e => {
+                        const nextRole = e.target.value as UserRole
+                        setRole(nextRole)
+                        setAllowedTabs(getDefaultTabsForRole(nextRole))
+                      }}
+                    >
                       {roles.map(r => (
                         <option key={r} value={r}>
                           {r}
@@ -818,6 +933,67 @@ export default function StaffPage(props: PageProps) {
                           <span>{b.name}</span>
                         </label>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="medkit-form-group">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="!mb-0 font-semibold text-slate-800">Allowed Sidebar Tabs *</label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAllowedTabs([...ALL_SIDEBAR_TABS])}
+                          className="text-[11px] text-[#5E0CF3] font-semibold hover:underline"
+                        >
+                          Select All
+                        </button>
+                        <span className="text-slate-300">|</span>
+                        <button
+                          type="button"
+                          onClick={() => setAllowedTabs([])}
+                          className="text-[11px] text-slate-500 font-semibold hover:underline"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mb-2">
+                      Jis tab par tick hoga, user ko sirf wahi tab sidebar mein nazar aayega aur access hoga.
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl max-h-60 overflow-y-auto">
+                      {ALL_SIDEBAR_TABS.map(tab => {
+                        const isSelected = allowedTabs.includes(tab)
+                        const iconName = TAB_ICONS[tab] || 'box'
+                        return (
+                          <button
+                            key={tab}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) setAllowedTabs(allowedTabs.filter(t => t !== tab))
+                              else setAllowedTabs([...allowedTabs, tab])
+                            }}
+                            className={`flex items-center justify-between p-2 rounded-xl border text-left transition-all ${
+                              isSelected
+                                ? 'bg-purple-50/90 border-[#5E0CF3] text-[#5E0CF3] shadow-xs'
+                                : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50/80'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
+                                isSelected ? 'bg-[#5E0CF3] text-white' : 'bg-slate-100 text-slate-500'
+                              }`}>
+                                <Icon name={iconName} size={13} />
+                              </span>
+                              <span className="text-xs font-semibold truncate">{tab}</span>
+                            </div>
+                            <span className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${
+                              isSelected ? 'bg-[#5E0CF3] border-[#5E0CF3] text-white' : 'border-slate-300 bg-white'
+                            }`}>
+                              {isSelected && <Icon name="check" size={10} />}
+                            </span>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 </div>
@@ -865,6 +1041,7 @@ export default function StaffPage(props: PageProps) {
                       role: editing.role as UserRole,
                       isActive: editing.isActive,
                       branchIds: editing.branchIds,
+                      allowedTabs: editing.allowedTabs || getDefaultTabsForRole(editing.role as UserRole),
                     })
                     setUsers(result)
                     setEditing(null)
@@ -914,6 +1091,70 @@ export default function StaffPage(props: PageProps) {
                           <span>{b.name}</span>
                         </label>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="medkit-form-group">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="!mb-0 font-semibold text-slate-800">Allowed Sidebar Tabs *</label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditing({ ...editing, allowedTabs: [...ALL_SIDEBAR_TABS] })}
+                          className="text-[11px] text-[#5E0CF3] font-semibold hover:underline"
+                        >
+                          Select All
+                        </button>
+                        <span className="text-slate-300">|</span>
+                        <button
+                          type="button"
+                          onClick={() => setEditing({ ...editing, allowedTabs: [] })}
+                          className="text-[11px] text-slate-500 font-semibold hover:underline"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mb-2">
+                      Jis tab par tick hoga, user ko sirf wahi tab sidebar mein nazar aayega aur access hoga.
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl max-h-60 overflow-y-auto">
+                      {ALL_SIDEBAR_TABS.map(tab => {
+                        const currentTabs = editing.allowedTabs || getDefaultTabsForRole(editing.role as UserRole)
+                        const isSelected = currentTabs.includes(tab)
+                        const iconName = TAB_ICONS[tab] || 'box'
+                        return (
+                          <button
+                            key={tab}
+                            type="button"
+                            onClick={() => {
+                              const next = isSelected
+                                ? currentTabs.filter(t => t !== tab)
+                                : [...currentTabs, tab]
+                              setEditing({ ...editing, allowedTabs: next })
+                            }}
+                            className={`flex items-center justify-between p-2 rounded-xl border text-left transition-all ${
+                              isSelected
+                                ? 'bg-purple-50/90 border-[#5E0CF3] text-[#5E0CF3] shadow-xs'
+                                : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50/80'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
+                                isSelected ? 'bg-[#5E0CF3] text-white' : 'bg-slate-100 text-slate-500'
+                              }`}>
+                                <Icon name={iconName} size={13} />
+                              </span>
+                              <span className="text-xs font-semibold truncate">{tab}</span>
+                            </div>
+                            <span className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${
+                              isSelected ? 'bg-[#5E0CF3] border-[#5E0CF3] text-white' : 'border-slate-300 bg-white'
+                            }`}>
+                              {isSelected && <Icon name="check" size={10} />}
+                            </span>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 </div>

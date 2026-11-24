@@ -117,4 +117,25 @@ export function registerRetailRoutes(
       return reply.status(400).send({ error: 'PaySupplierError', message: err?.message || 'Failed to pay supplier.', statusCode: 400 });
     }
   });
+
+  // POST /api/retail/create-supplier
+  app.post('/api/retail/create-supplier', async (request, reply) => {
+    const body = request.body as { name?: string; phone?: string } | undefined;
+    if (!body || !body.name || !body.name.trim()) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'Supplier name is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db);
+    if (!guarded) return;
+
+    try {
+      const result = db.retail.createSupplier(body as any, body.phone);
+      sync?.broadcast({
+        type: 'purchase:received', // triggers notifyRetailDataChanged to reload suppliers
+        businessId: guarded.session.businessId,
+      });
+      return result;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'CreateSupplierError', message: err?.message || 'Failed to create supplier.', statusCode: 400 });
+    }
+  });
 }

@@ -225,27 +225,31 @@
 }
 .purchases-table-scroll {
   overflow-x: auto;
+  min-height: 320px;
+  padding-bottom: 80px;
 }
 .purchases-table-card table {
   width: 100%;
   min-width: 920px;
   border-collapse: collapse;
-  font-size: 9px;
+  font-size: 13px;
 }
 .purchases-table-card th {
-  height: 40px;
-  padding: 0 9px;
+  height: 42px;
+  padding: 0 10px;
   text-align: left;
   color: #314b6c;
   background: #f1f5fa;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   white-space: nowrap;
 }
 .purchases-table-card td {
-  height: 43px;
-  padding: 0 9px;
+  height: 50px;
+  padding: 0 10px;
   border-top: 1px solid #e4ebf3;
   color: #334f70;
+  font-size: 13px;
   white-space: nowrap;
 }
 .purchases-table-card td:nth-child(2) b {

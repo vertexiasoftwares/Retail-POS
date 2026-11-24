@@ -1,38 +1,49 @@
 /* ========================================================================= */
-/* Vertexia Retail POS — Global Typography System                            */
-/* Headings, Page Titles, Card Titles, Dashboard Stats -> DM Sans            */
-/* Body, Sidebar, Tables, Buttons, Forms, Inputs, Labels -> Plus Jakarta Sans */
+/* Vertexia Retail POS — Global Consistent Typography System                 */
+/* Headings: Plus Jakarta Sans (600–700)                                     */
+/* Body, Buttons, Forms, Tables, Inputs, Navigation: DM Sans (400–500)       */
+/* Dashboard numbers & Financial figures: Plus Jakarta Sans (600–700)        */
 /* ========================================================================= */
 
 :root {
-  --font-heading: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-heading: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-numeric: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-/* 1. Global Default: Plus Jakarta Sans for All UI Base Elements */
+/* ========================================================================= */
+/* 1. Global Default: DM Sans (400–500) for Body, Navigation, Forms, Tables  */
+/* ========================================================================= */
 html,
 body,
 #root,
-button,
+p,
+span,
+div,
+label,
 input,
 select,
 textarea,
-p,
-span,
-label,
+button,
+table,
+thead,
+tbody,
+tfoot,
+tr,
+th,
+td,
 a,
 li,
-td,
-th,
-div,
+ol,
+ul,
 section,
+article,
 aside,
 nav,
 header,
 footer,
 dialog,
-table,
 small,
 kbd,
 .nav-item,
@@ -48,21 +59,54 @@ kbd,
 .register-switch-link,
 .activation-steps-bar,
 .support-contact-row,
-.whatsapp-support-btn {
+.whatsapp-support-btn,
+.sidebar-user-role,
+.sidebar-branch-select,
+.license-status-banner p,
+.license-status-banner small,
+.form-field label,
+.form-field input,
+.form-field select,
+.form-field textarea,
+.form-field .field-hint {
   font-family: var(--font-body);
+  font-weight: 400;
 }
 
-/* 2. DM Sans: All Headings */
+/* Semibold (500) for Interactive UI Controls, Buttons, Labels, Table Headers & Navigation */
+button,
+label,
+th,
+.nav-item span,
+.top-navigation-tab,
+.sidebar-branch-select,
+.btn,
+.action-btn,
+.nav-link,
+.tab-btn,
+.auth-btn-primary,
+.auth-btn-secondary,
+.nav-outline-btn,
+.nav-text-btn,
+.sidebar-nav a,
+.sidebar-subnav a,
+.table-header,
+.filter-label,
+.tab-item {
+  font-family: var(--font-body);
+  font-weight: 500;
+}
+
+/* ========================================================================= */
+/* 2. Headings: Plus Jakarta Sans (600–700) Across All Screens               */
+/* ========================================================================= */
 h1,
 h2,
 h3,
 h4,
 h5,
-h6 {
-  font-family: var(--font-heading) !important;
-}
-
-/* 3. DM Sans: Page Titles */
+h6,
+.font-heading,
 .page-heading,
 .page-heading h1,
 .page-heading h2,
@@ -83,11 +127,7 @@ h6 {
 .login-intro h1,
 .app-navigation-brand strong,
 .sidebar .brand strong,
-.sidebar-brand-row strong {
-  font-family: var(--font-heading) !important;
-}
-
-/* 4. DM Sans: Card Titles */
+.sidebar-brand-row strong,
 .card-heading h2,
 .card-heading h3,
 .table-card h2,
@@ -96,7 +136,6 @@ h6 {
 .growth-card h3,
 .recent-activity h2,
 .recent-activity h3,
-.stat-card p,
 .card-title,
 .dashboard-card-title,
 .modal-header h2,
@@ -108,11 +147,35 @@ h6 {
 .pos-card-title,
 .direct-side-block h3,
 .branch-card strong,
-.sidebar-user-name {
+.sidebar-user-name,
+.auth-eyebrow,
+.desktop-brand-name,
+.medkit-banner-titles h1,
+.medkit-card-header h2,
+.medkit-card-header h3,
+.medkit-modal-header h2 {
   font-family: var(--font-heading) !important;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
-/* 5. DM Sans: Dashboard Statistics & Key Financial Metrics */
+h3,
+h4,
+h5,
+h6,
+.card-heading h3,
+.table-card h3,
+.modal-header h3,
+.dialog-header h3,
+.medkit-card-header h3,
+.stat-card-title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ========================================================================= */
+/* 3. Dashboard Numbers & Financial Figures: Plus Jakarta Sans (600–700)     */
+/* ========================================================================= */
 .stat-card > strong,
 .stat-card strong,
 .stat-foot b,
@@ -143,45 +206,202 @@ h6 {
 .account-balance,
 .grand-total,
 .due-amount,
-.received-amount {
+.received-amount,
+.pos-cart-total,
+.pos-total-display,
+.cart-subtotal,
+.cart-grand-total,
+.tendered-amount,
+.change-amount,
+.price-tag,
+.financial-figure,
+.currency-amount,
+.numeric-display,
+.medkit-stat-value,
+.font-numeric {
+  font-family: var(--font-numeric) !important;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Secondary financial figures and table amounts (weight 600) */
+.table-amount,
+.ledger-amount,
+.row-total,
+.unit-price,
+.stock-badge,
+.balance-figure,
+.cash-figure,
+.total-cell,
+.price-cell,
+.amount-cell,
+.cost-figure,
+.profit-figure,
+.discount-figure {
+  font-family: var(--font-numeric) !important;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ========================================================================= */
+/* 4. Utility Classes For Component Convenience                              */
+/* ========================================================================= */
+.font-heading {
   font-family: var(--font-heading) !important;
 }
 
-/* 6. Plus Jakarta Sans: Explicit Enforcement on All Forms, Inputs, Buttons & UI Controls */
-input,
-select,
-textarea,
-button,
-label,
-table,
-th,
-td,
-.input-with-icon-fixed input,
-.auth-btn-primary,
-.auth-btn-secondary,
-.nav-item span,
-.top-navigation-tab,
-.sidebar-user-role,
-.sidebar-branch-select,
-.activation-steps-bar li,
-.license-status-banner p,
-.license-status-banner small,
-.support-instruction,
-.support-contact-row span,
-.registered-store-name,
-.auth-eyebrow-pill,
-.form-field label,
-.form-field .field-hint {
-  font-family: var(--font-body);
+.font-body {
+  font-family: var(--font-body) !important;
 }
 
-/* 7. Monospace Exception for Keys, Barcodes & Registration Codes */
+.font-numeric {
+  font-family: var(--font-numeric) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ========================================================================= */
+/* 5. Monospace Exception for Keys, Barcodes, Device IDs & Terminal Codes   */
+/* ========================================================================= */
 .font-mono,
 code.registration-code,
 .license-key-input-field,
 .reg-id-display-box code,
 .barcode-text,
 code.mono,
-.device-id-code {
+.device-id-code,
+code,
+pre,
+kbd {
   font-family: var(--font-mono) !important;
+}
+
+/* ========================================================================= */
+/* 6. Global Typography Scaling & High Readability Enhancement               */
+/* ========================================================================= */
+
+/* Tables across POS, Dashboard, Products, Purchases, Customers, Reports */
+table {
+  font-size: 14.5px !important;
+}
+
+table th {
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  color: #475569 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 12px 14px !important;
+}
+
+table td {
+  font-size: 14px !important;
+  padding: 12px 14px !important;
+  color: #1e293b !important;
+}
+
+table td small {
+  font-size: 12px !important;
+  color: #64748b !important;
+}
+
+/* Forms, Inputs, Dropdowns and Labels */
+label,
+.form-field label,
+.form-group label {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #334155 !important;
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  font-size: 14.5px !important;
+  color: #0f172a !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  font-size: 13.5px !important;
+  color: #94a3b8 !important;
+}
+
+/* Primary and secondary UI buttons */
+button:not(.sidebar button):not(.desktop-titlebar button),
+.btn,
+.action-btn {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+}
+
+/* Dashboard stat cards and metrics */
+.stat-card-title,
+.stat-label {
+  font-size: 13.5px !important;
+  color: #64748b !important;
+}
+
+.stat-card strong,
+.metric-value,
+.sales-amount,
+.total-amount,
+.dashboard-stat,
+.kpi-value {
+  font-size: 24px !important;
+  font-weight: 700 !important;
+}
+
+/* Quick Actions & Money Overview */
+.quick-action-text strong {
+  font-size: 14.5px !important;
+}
+
+.quick-action-text span {
+  font-size: 12.5px !important;
+}
+
+.money-overview-item strong {
+  font-size: 15.5px !important;
+}
+
+.money-overview-item span {
+  font-size: 13px !important;
+}
+
+/* Modals and dialog headers */
+.modal-header h2,
+.modal-header h3,
+.dialog-header h2,
+.sheet-title {
+  font-size: 20px !important;
+  font-weight: 700 !important;
+}
+
+.modal-header p {
+  font-size: 13.5px !important;
+  color: #64748b !important;
+}
+
+/* Badges and status pills */
+.badge,
+.status-pill,
+.stock-badge,
+.medkit-status-pill {
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+}
+
+/* Pagination */
+.pagination,
+.medkit-pagination {
+  font-size: 13.5px !important;
+}
+
+/* Remove Desktop Titlebar, Desktop Footer & Branch Switcher */
+.desktop-titlebar,
+.desktop-footer,
+.store-switcher,
+.dashboard-branch-select {
+  display: none !important;
 }

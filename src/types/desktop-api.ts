@@ -283,7 +283,7 @@ export type RetailSnapshot = {
   products:ProductCatalogRecord[]
   movements:Array<{id:string;productId:string;productName:string;type:string;quantityDeltaMilli:number;balanceAfterMilli:number;reason:string;referenceId:string;occurredAt:string}>
   purchases:Array<{id:string;supplierId:string;purchaseNumber:string;supplierName:string;supplierInvoiceNumber:string;businessDate:string;totalPaisa:number;paidPaisa:number;duePaisa:number;createdAt:string;lines:Array<{productId:string;quantityMilli:number;unitCostPaisa:number}>}>
-  suppliers:Array<{id:string;name:string;phone:string;isActive:boolean;totalPurchasesPaisa:number;totalPaidPaisa:number;outstandingPaisa:number;lastPurchaseDate:string|null}>
+  suppliers:Array<{id:string;name:string;phone:string;isActive:boolean;totalPurchasesPaisa:number;totalPaidPaisa:number;outstandingPaisa:number;lastPurchaseDate:string|null;contactPerson?:string;email?:string;ntnStrn?:string;city?:string;address?:string;categories?:string;paymentTerms?:string;note?:string}>
   payments:Array<{id:string;supplierId:string;businessDate:string;method:RetailPaymentMethod;amountPaisa:number;reference:string;createdAt:string}>
   supplierLedger:Array<{id:string;supplierId:string;businessDate:string;type:string;reference:string;debitPaisa:number;creditPaisa:number;balanceAfterPaisa:number;occurredAt:string}>
 }
@@ -366,6 +366,7 @@ export type VertexiaDesktopApi = {
     getSnapshot(branchId: string): Promise<import('./recovery.js').CashSnapshot>
     closeShift(request: import('./recovery.js').CashCloseRequest): Promise<import('./recovery.js').CashShiftRecord>
     move(request: import('./recovery.js').CashMoveRequest): Promise<{ transactionId: string; expectedCashPaisa: number }>
+    forceClose(request: import('./recovery.js').CashForceCloseRequest): Promise<import('./recovery.js').CashShiftRecord>
   }
   backup: {
     getStatus(): Promise<import('./recovery.js').BackupStatus>
@@ -393,6 +394,7 @@ export type VertexiaDesktopApi = {
     adjustStock(request:StockAdjustmentRequest):Promise<{movementId:string;balanceAfterMilli:number}>
     receivePurchase(request:PurchaseReceiveRequest):Promise<PurchaseReceiveResult>
     paySupplier(request:SupplierPayRequest):Promise<{paymentId:string;outstandingPaisa:number}>
+    createSupplier(name: string | Record<string, any>, phone?: string): Promise<{ id: string; name: string }>
   }
   dashboard: {
     getSnapshot(query: DashboardQuery): Promise<DashboardSnapshot>
@@ -404,7 +406,7 @@ export type VertexiaDesktopApi = {
     holdSale(branchId: string,customerId: string,lines: PosCartLineInput[]): Promise<PosHeldSale>
     resumeHeldSale(id: string): Promise<PosHeldSale>
     deleteHeldSale(id: string): Promise<void>
-    openShift(branchId: string,openingCashPaisa: number,operationId?: string): Promise<string>
+    openShift(branchId: string,openingCashPaisa: number,operationId?: string,note?: string,counterId?: string): Promise<string>
     createProduct(branchId: string,input: PosCreateProductInput): Promise<PosProduct>
     createCustomer(input: PosCreateCustomerInput): Promise<PosCustomer>
   }
@@ -412,6 +414,7 @@ export type VertexiaDesktopApi = {
     list(query: ProductCatalogQuery): Promise<ProductCatalogResult>
     save(branchId:string,input:ProductSaveInput): Promise<ProductCatalogRecord>
     toggleStatus(branchId:string,id:string): Promise<'active'|'inactive'>
+    delete(branchId:string,id:string): Promise<{ success:boolean;archived?:boolean }>
     importCsv(branchId:string,csv:string): Promise<ProductImportResult>
     exportCsv(branchId:string): Promise<{ canceled:boolean;path?:string }>
   }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import type { CashCloseRequest, CashMoveRequest, CashShiftRecord, CashSnapshot } from '../../src/types/recovery.js'
+import type { CashCloseRequest, CashForceCloseRequest, CashMoveRequest, CashShiftRecord, CashSnapshot } from '../../src/types/recovery.js'
 import { postOperation, requireSafeInteger, requireText } from './posting.mjs'
 import { retailBusinessDate } from './retail.mjs'
 
@@ -20,7 +20,25 @@ export class CashRepository {
     return result
   }
   private record(row: Row): CashShiftRecord {
-    return { id: String(row.id), branchId: String(row.branch_id), cashierId: String(row.cashier_id), cashierName: String(row.cashier_name), openingCashPaisa: Number(row.opening_cash_paisa), status: row.status as 'open' | 'closed', openedAt: String(row.opened_at), closedAt: row.closed_at === null ? null : String(row.closed_at), expectedCashPaisa: row.expected_cash_paisa === null ? this.expected(String(row.id)) : Number(row.expected_cash_paisa), countedCashPaisa: row.counted_cash_paisa === null ? null : Number(row.counted_cash_paisa), variancePaisa: row.variance_paisa === null ? null : Number(row.variance_paisa), closingNote: String(row.note ?? ''), closedByName: row.closed_by_name === null ? null : String(row.closed_by_name) }
+    return {
+      id: String(row.id),
+      branchId: String(row.branch_id),
+      cashierId: String(row.cashier_id),
+      cashierName: String(row.cashier_name),
+      counterId: row.counter_id ? String(row.counter_id) : 'Counter 1',
+      openingCashPaisa: Number(row.opening_cash_paisa),
+      status: row.status as 'open' | 'closed',
+      openedAt: String(row.opened_at),
+      closedAt: row.closed_at === null ? null : String(row.closed_at),
+      expectedCashPaisa: row.expected_cash_paisa === null ? this.expected(String(row.id)) : Number(row.expected_cash_paisa),
+      countedCashPaisa: row.counted_cash_paisa === null ? null : Number(row.counted_cash_paisa),
+      variancePaisa: row.variance_paisa === null ? null : Number(row.variance_paisa),
+      closingNote: String(row.note ?? ''),
+      closedByName: row.closed_by_name === null ? null : String(row.closed_by_name),
+      note: String(row.shift_note ?? row.note ?? ''),
+      approvedBy: row.approved_by ? String(row.approved_by) : null,
+      closeReason: row.close_reason ? String(row.close_reason) : null,
+    }
   }
   snapshot(branchId: string, userId?: string): CashSnapshot {
     this.branch(branchId)
@@ -29,7 +47,7 @@ export class CashRepository {
     const user = this.db.prepare("SELECT role FROM users WHERE id=?").get(actorId) as Row | undefined
     const isManagerOrOwner = user?.role === 'Owner' || user?.role === 'Manager'
     const targetUserId = isManagerOrOwner ? userId : (userId ?? actorId)
-    const rows = this.db.prepare(`SELECT s.*,u.name AS cashier_name,c.counted_cash_paisa,c.expected_cash_paisa,c.variance_paisa,c.note,cu.name AS closed_by_name FROM cash_shifts s JOIN users u ON u.id=s.cashier_id LEFT JOIN cash_shift_closings c ON c.shift_id=s.id LEFT JOIN users cu ON cu.id=c.closed_by WHERE s.branch_id=? ${targetUserId ? 'AND s.cashier_id=?' : ''} ORDER BY s.opened_at DESC,s.rowid DESC LIMIT 100`).all(...(targetUserId ? [branchId, targetUserId] : [branchId])) as Row[]
+    const rows = this.db.prepare(`SELECT s.*,s.note AS shift_note,u.name AS cashier_name,c.counted_cash_paisa,c.expected_cash_paisa,c.variance_paisa,c.note,cu.name AS closed_by_name FROM cash_shifts s JOIN users u ON u.id=s.cashier_id LEFT JOIN cash_shift_closings c ON c.shift_id=s.id LEFT JOIN users cu ON cu.id=c.closed_by WHERE s.branch_id=? ${targetUserId ? 'AND s.cashier_id=?' : ''} ORDER BY s.opened_at DESC,s.rowid DESC LIMIT 100`).all(...(targetUserId ? [branchId, targetUserId] : [branchId])) as Row[]
     const shifts = rows.map(row => this.record(row))
     const activeShift = shifts.find(shift => shift.status === 'open') ?? null
     const selected = activeShift ?? shifts[0]
@@ -87,6 +105,29 @@ export class CashRepository {
       this.db.prepare('INSERT INTO cash_movement_notes VALUES (?,?,?)').run(id, reason, actorId)
       this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Cash', 'cash_transaction', id, reason, `${request.direction} ${amount} paisa`, time)
       return { transactionId: id, expectedCashPaisa: next }
+    })
+  }
+  forceClose(request: CashForceCloseRequest): CashShiftRecord {
+    if (!request || typeof request !== 'object') throw new Error('Invalid force close request.')
+    const reason = requireText(request.reason, 'Force close reason', 500)
+    if (reason.length < 3) throw new Error('Provide a reason of at least three characters.')
+    const operationId = request.operationId || `force-close-${request.shiftId}`
+    return postOperation(this.db, request.branchId, operationId, 'shift.force_close', request, this.now().toISOString(), () => {
+      this.branch(request.branchId)
+      const actorId = this.actor()
+      const user = this.db.prepare('SELECT role FROM users WHERE id=?').get(actorId) as Row | undefined
+      if (user?.role !== 'Owner' && user?.role !== 'Manager') {
+        throw new Error('Only a manager or owner can force-close an unclosed shift.')
+      }
+      const shift = this.db.prepare("SELECT * FROM cash_shifts WHERE id=? AND branch_id=? AND status='open'").get(request.shiftId, request.branchId) as Row | undefined
+      if (!shift) throw new Error('Shift is not found or already closed.')
+      const expected = this.expected(request.shiftId)
+      const time = this.now().toISOString()
+      const closeNote = `Force closed by ${user.role}: ${reason}`
+      this.db.prepare('INSERT INTO cash_shift_closings VALUES (?,?,?,?,?,?,?)').run(request.shiftId, expected, expected, 0, closeNote, actorId, time)
+      this.db.prepare("UPDATE cash_shifts SET status='closed', closed_at=?, close_reason=? WHERE id=?").run(time, reason, request.shiftId)
+      this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Shift', 'cash_shift', request.shiftId, 'Shift force-closed by manager', `Reason: ${reason}`, time)
+      return this.snapshot(request.branchId).shifts.find(s => s.id === request.shiftId)!
     })
   }
 }

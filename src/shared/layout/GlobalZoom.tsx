@@ -6,7 +6,22 @@ const DEFAULT_ZOOM = 1.0
 const STEP = 0.05
 
 export function GlobalZoom() {
+  const isElectron = typeof window !== 'undefined' && Boolean((window as any).desktopApp)
+
+  // In standard web browser mode, remove any CSS zoom and let Chrome's native engine handle zoom seamlessly
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.zoom = ''
+      document.body.style.zoom = ''
+      document.documentElement.style.removeProperty('--zoom-factor')
+      try {
+        localStorage.removeItem('vertexia_app_zoom')
+      } catch {}
+    }
+  }, [])
+
   const [zoom, setZoom] = useState<number>(() => {
+    if (!isElectron) return DEFAULT_ZOOM
     try {
       const saved = localStorage.getItem('vertexia_app_zoom')
       if (saved) {
@@ -17,8 +32,10 @@ export function GlobalZoom() {
     return DEFAULT_ZOOM
   })
 
-  // Synchronize with Electron webFrame and persist
+  // Synchronize ONLY in Electron with webFrame
   useEffect(() => {
+    if (!isElectron) return
+
     const clamped = Math.round(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom)) * 100) / 100
 
     const apply = () => {
@@ -26,10 +43,7 @@ export function GlobalZoom() {
         try {
           window.vertexia.zoom.setZoomFactor(clamped)
         } catch {}
-      } else {
-        document.documentElement.style.zoom = String(clamped)
       }
-      document.documentElement.style.setProperty('--zoom-factor', String(clamped))
       try {
         localStorage.setItem('vertexia_app_zoom', String(clamped))
       } catch {}
@@ -37,7 +51,6 @@ export function GlobalZoom() {
 
     apply()
 
-    // Reassert whenever window is restored, focused, or unhidden
     const handleReassert = () => {
       apply()
     }
@@ -51,10 +64,11 @@ export function GlobalZoom() {
       window.removeEventListener('pageshow', handleReassert)
       document.removeEventListener('visibilitychange', handleReassert)
     }
-  }, [zoom])
+  }, [zoom, isElectron])
 
   // Listen for electron zoom broadcast
   useEffect(() => {
+    if (!isElectron) return
     const unsubscribe = window.vertexia?.zoom?.onZoomFactorChange?.((factor: number) => {
       if (typeof factor === 'number' && factor >= MIN_ZOOM && factor <= MAX_ZOOM) {
         setZoom(factor)
@@ -63,10 +77,12 @@ export function GlobalZoom() {
     return () => {
       unsubscribe?.()
     }
-  }, [])
+  }, [isElectron])
 
-  // Wheel and Keyboard listener
+  // Wheel and Keyboard listener ONLY for Electron
   useEffect(() => {
+    if (!isElectron) return
+
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
@@ -108,7 +124,7 @@ export function GlobalZoom() {
       window.removeEventListener('keydown', handleKeyDown, { capture: true })
       document.removeEventListener('keydown', handleKeyDown, { capture: true })
     }
-  }, [])
+  }, [isElectron])
 
   return null
 }

@@ -217,26 +217,31 @@
 }
 .customers-table-scroll {
   overflow-x: auto;
+  min-height: 320px;
+  padding-bottom: 80px;
 }
 .customers-table-card table {
   width: 100%;
   min-width: 890px;
   border-collapse: collapse;
-  font-size: 9px;
+  font-size: 13px;
 }
 .customers-table-card th {
-  height: 39px;
-  padding: 0 8px;
+  height: 42px;
+  padding: 0 10px;
   text-align: left;
   color: #304a6b;
   background: #f1f5fa;
+  font-size: 12px;
+  font-weight: 700;
   white-space: nowrap;
 }
 .customers-table-card td {
-  height: 43px;
-  padding: 0 8px;
+  height: 50px;
+  padding: 0 10px;
   border-top: 1px solid #e4ebf3;
   color: #294769;
+  font-size: 13px;
   white-space: nowrap;
 }
 .customers-table-card input[type="checkbox"] {

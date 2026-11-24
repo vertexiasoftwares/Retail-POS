@@ -139,7 +139,7 @@ export function registerPosRoutes(
 
   // POST /api/pos/open-shift
   app.post('/api/pos/open-shift', async (request, reply) => {
-    const body = request.body as { branchId: string; openingCashPaisa: number; operationId?: string } | undefined;
+    const body = request.body as { branchId: string; openingCashPaisa: number; operationId?: string; note?: string; counterId?: string } | undefined;
     if (!body || !body.branchId) {
       return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
     }
@@ -148,12 +148,12 @@ export function registerPosRoutes(
 
     try {
       const scopedBody = ensureOperationId(body, guarded.session.userId);
-      const shiftId = db.openPosShift(body.branchId, body.openingCashPaisa, scopedBody.operationId);
+      const shiftId = db.openPosShift(body.branchId, body.openingCashPaisa, scopedBody.operationId, body.note, body.counterId);
       sync?.broadcast({
         type: 'shift:opened',
         branchId: body.branchId,
         businessId: guarded.session.businessId,
-        payload: { shiftId, cashierId: guarded.session.userId },
+        payload: { shiftId, cashierId: guarded.session.userId, counterId: body.counterId || 'Counter 1' },
       });
       return { shiftId };
     } catch (err: any) {

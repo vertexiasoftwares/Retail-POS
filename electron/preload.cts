@@ -48,6 +48,7 @@ const api: VertexiaDesktopApi = {
     getSnapshot: branchId => ipcRenderer.invoke('cash:get-snapshot', branchId),
     closeShift: request => ipcRenderer.invoke('cash:close-shift', request),
     move: request => ipcRenderer.invoke('cash:move', request),
+    forceClose: request => ipcRenderer.invoke('cash:force-close', request),
   },
   backup: {
     getStatus: () => ipcRenderer.invoke('backup:get-status'),
@@ -79,6 +80,7 @@ const api: VertexiaDesktopApi = {
     adjustStock: request => ipcRenderer.invoke('retail:adjust-stock', request),
     receivePurchase: request => ipcRenderer.invoke('retail:receive-purchase', request),
     paySupplier: request => ipcRenderer.invoke('retail:pay-supplier', request),
+    createSupplier: (name, phone) => ipcRenderer.invoke('retail:create-supplier', name, phone),
   },
   dashboard: {
     getSnapshot: (query: DashboardQuery) => ipcRenderer.invoke('dashboard:get-snapshot', query),
@@ -90,7 +92,7 @@ const api: VertexiaDesktopApi = {
     holdSale: (branchId: string,customerId: string,lines: PosCartLineInput[]) => ipcRenderer.invoke('pos:hold-sale',branchId,customerId,lines),
     resumeHeldSale: (id: string) => ipcRenderer.invoke('pos:resume-held-sale',id),
     deleteHeldSale: (id: string) => ipcRenderer.invoke('pos:delete-held-sale',id),
-    openShift: (branchId: string,openingCashPaisa: number,operationId?: string) => ipcRenderer.invoke('pos:open-shift',branchId,openingCashPaisa,operationId),
+    openShift: (branchId: string,openingCashPaisa: number,operationId?: string,note?: string,counterId?: string) => ipcRenderer.invoke('pos:open-shift',branchId,openingCashPaisa,operationId,note,counterId),
     createProduct: (branchId: string,input: PosCreateProductInput) => ipcRenderer.invoke('pos:create-product',branchId,input),
     createCustomer: (input: PosCreateCustomerInput) => ipcRenderer.invoke('pos:create-customer',input),
   },
@@ -98,6 +100,7 @@ const api: VertexiaDesktopApi = {
     list: (query:ProductCatalogQuery) => ipcRenderer.invoke('products:list',query),
     save: (branchId:string,input:ProductSaveInput) => ipcRenderer.invoke('products:save',branchId,input),
     toggleStatus: (branchId:string,id:string) => ipcRenderer.invoke('products:toggle-status',branchId,id),
+    delete: (branchId:string,id:string) => ipcRenderer.invoke('products:delete',branchId,id),
     importCsv: (branchId:string,csv:string) => ipcRenderer.invoke('products:import-csv',branchId,csv),
     exportCsv: (branchId:string) => ipcRenderer.invoke('products:export-csv',branchId),
   },

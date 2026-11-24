@@ -12,14 +12,25 @@ function AuthenticatedApp() {
   const { session, canPage } = useAuth()
   const [activePage, setActivePage] = useState<PageName>(() => hashToPage[window.location.hash] ?? 'POS')
 
+  const findFirstPermittedPage = (): PageName => {
+    const allPageNames: PageName[] = [
+      'Dashboard', 'POS', 'Sales', 'Products', 'Inventory',
+      'Purchases', 'Customers', 'Suppliers', 'Cash & Shifts',
+      'Expenses', 'Staff', 'Reports', 'Settings', 'My Account'
+    ]
+    return allPageNames.find(p => canPage(p)) ?? 'My Account'
+  }
+
   const navigate = (requestedPage: string) => {
-    const page = requestedPage in pages && canPage(requestedPage) ? (requestedPage as PageName) : canPage('POS') ? 'POS' : 'Products'
+    const fallback = findFirstPermittedPage()
+    const page = requestedPage in pages && canPage(requestedPage) ? (requestedPage as PageName) : fallback
     setActivePage(page)
-    window.history.replaceState(null, '', pageToHash[page])
+    window.history.replaceState(null, '', pageToHash[page] ?? '')
     window.scrollTo(0, 0)
   }
 
-  const permittedPage = canPage(activePage) ? activePage : canPage('POS') ? 'POS' : 'Products'
+  const fallback = findFirstPermittedPage()
+  const permittedPage = canPage(activePage) ? activePage : fallback
   const ActivePage = pages[permittedPage]
   const props = { onNavigate: navigate }
   return (

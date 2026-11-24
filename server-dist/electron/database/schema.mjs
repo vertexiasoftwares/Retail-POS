@@ -515,5 +515,42 @@ export const migrations = [
       INSERT OR IGNORE INTO stock_values SELECT branch_id,product_id,0,0,updated_at FROM stock_levels WHERE quantity_milli=0;
     `,
     },
+    {
+        version: 11,
+        sql: `
+      ALTER TABLE cash_shifts ADD COLUMN counter_id TEXT;
+      ALTER TABLE cash_shifts ADD COLUMN note TEXT NOT NULL DEFAULT '';
+      ALTER TABLE cash_shifts ADD COLUMN approved_by TEXT REFERENCES users(id);
+      ALTER TABLE cash_shifts ADD COLUMN close_reason TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_shifts_one_open_counter
+        ON cash_shifts(branch_id, counter_id) WHERE status='open' AND counter_id IS NOT NULL;
+      ALTER TABLE sales ADD COLUMN shift_id TEXT REFERENCES cash_shifts(id);
+      ALTER TABLE sale_returns ADD COLUMN shift_id TEXT REFERENCES cash_shifts(id);
+      ALTER TABLE cash_movement_notes ADD COLUMN approved_by TEXT REFERENCES users(id);
+    `,
+    },
+    {
+        version: 12,
+        sql: `
+      ALTER TABLE users ADD COLUMN allowed_tabs TEXT;
+    `,
+    },
+    {
+        version: 13,
+        sql: `
+      CREATE TABLE IF NOT EXISTS supplier_profiles (
+        supplier_id TEXT PRIMARY KEY REFERENCES suppliers(id),
+        contact_person TEXT,
+        email TEXT,
+        ntn_strn TEXT,
+        city TEXT,
+        address TEXT,
+        categories TEXT,
+        opening_balance_paisa INTEGER NOT NULL DEFAULT 0,
+        payment_terms TEXT,
+        note TEXT
+      ) STRICT;
+    `,
+    },
 ];
 //# sourceMappingURL=schema.mjs.map

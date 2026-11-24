@@ -102,13 +102,13 @@
   white-space: nowrap;
 }
 .product-category-tabs strong {
-  font-size: 10px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
 }
 .product-category-tabs small {
   color: #7187a3;
-  font-size: 8px;
-  margin-top: 7px;
+  font-size: 11px;
+  margin-top: 5px;
 }
 .product-category-tabs button.active {
   color: #fff;
@@ -190,18 +190,22 @@
 }
 .catalog-table-scroll {
   width: 100%;
-  overflow: auto;
+  overflow-x: auto;
+  min-height: 320px;
+  padding-bottom: 80px;
 }
 .catalog-table-card table {
   min-width: 910px;
   table-layout: auto;
+  font-size: 13px;
 }
 .catalog-table-card th {
-  height: 40px;
-  padding: 0 8px;
+  height: 42px;
+  padding: 0 10px;
   color: #47607e;
   background: #f7f9fc;
-  font-size: 8px;
+  font-size: 12px;
+  font-weight: 700;
   white-space: nowrap;
 }
 .catalog-table-card th:first-child,
@@ -210,10 +214,10 @@
   text-align: center;
 }
 .catalog-table-card td {
-  height: 48px;
-  padding: 0 8px;
+  height: 50px;
+  padding: 0 10px;
   color: #344e6e;
-  font-size: 8px;
+  font-size: 13px;
   white-space: nowrap;
 }
 .catalog-table-card input[type="checkbox"] {
@@ -282,11 +286,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 61px;
-  height: 22px;
-  border-radius: 11px;
-  font-size: 8px;
-  font-weight: 500;
+  min-width: 72px;
+  height: 25px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 10px;
 }
 .catalog-status.in-stock {
   color: #078a6b;

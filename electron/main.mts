@@ -15,7 +15,7 @@ import { VertexiaDatabase } from './database/database.mjs'
 import { AuthRepository } from './database/auth.mjs'
 import { BackupService } from './backup.mjs'
 import type { CustomerCollectRequest, CustomerCreateRequest, CustomerQuery, CustomerUpdateRequest, ExpensePostRequest, ExpenseQuery, ExpenseReverseRequest } from '../src/types/accounts.js'
-import type { BackupRestoreRequest, CashCloseRequest, CashMoveRequest } from '../src/types/recovery.js'
+import type { BackupRestoreRequest, CashCloseRequest, CashForceCloseRequest, CashMoveRequest } from '../src/types/recovery.js'
 import { authorizeIpc, scopeOperation, licenseBranches } from './ipc-policy.mjs'
 import { requiresTransactionLicense } from './licensing/policy.mjs'
 import type { BusinessSetupInput, StaffCreateInput, StaffUpdateInput } from '../src/types/auth.js'
@@ -149,6 +149,7 @@ function registerIpc() {
   handle('cash:get-snapshot', (_event, branchId) => database!.cash.snapshot(requiredId(branchId), auth!.current()!.role === 'Cashier' ? auth!.current()!.userId : undefined))
   handle('cash:close-shift', (_event, request) => database!.cash.close(request as CashCloseRequest))
   handle('cash:move', (_event, request) => database!.cash.move(request as CashMoveRequest))
+  handle('cash:force-close', (_event, request) => database!.cash.forceClose(request as CashForceCloseRequest))
   handle('backup:get-status', () => backups!.status())
   handle('backup:create', () => backups!.create())
   handle('backup:export', async (_event, id) => {
@@ -208,6 +209,7 @@ function registerIpc() {
   handle('retail:adjust-stock', (_event, request: unknown) => database!.retail.adjustStock(request as StockAdjustmentRequest))
   handle('retail:receive-purchase', (_event, request: unknown) => database!.retail.receivePurchase(request as PurchaseReceiveRequest))
   handle('retail:pay-supplier', (_event, request: unknown) => database!.retail.paySupplier(request as SupplierPayRequest))
+  handle('retail:create-supplier', (_event, name: unknown, phone?: unknown) => database!.retail.createSupplier(name as string, phone as string | undefined))
   handle('dashboard:get-snapshot', (_event, query: unknown) => {
     const result = database!.getDashboardSnapshot(validateDashboardQuery(query))
     result.branches = result.branches.filter(branch => auth!.current()!.branches.some(assigned => assigned.id === branch.id))
@@ -230,12 +232,13 @@ function registerIpc() {
   handle('pos:hold-sale', (_event, branchId: unknown, customerId: unknown, lines: unknown) => database!.holdPosSale(requiredId(branchId),requiredId(customerId),lines as PosCartLineInput[]))
   handle('pos:resume-held-sale', (_event, id: unknown) => database!.resumePosSale(requiredId(id)))
   handle('pos:delete-held-sale', (_event, id: unknown) => database!.deleteHeldPosSale(requiredId(id)))
-  handle('pos:open-shift', (_event, branchId: unknown, openingCashPaisa: unknown, operationId: unknown) => database!.openPosShift(requiredId(branchId),requiredInteger(openingCashPaisa,'opening cash'),operationId as string | undefined))
+  handle('pos:open-shift', (_event, branchId: unknown, openingCashPaisa: unknown, operationId: unknown, note: unknown, counterId: unknown) => database!.openPosShift(requiredId(branchId),requiredInteger(openingCashPaisa,'opening cash'),operationId as string | undefined, typeof note === 'string' ? note : undefined, typeof counterId === 'string' ? counterId : undefined))
   handle('pos:create-product', (_event, branchId: unknown, input: unknown) => database!.createPosProduct(requiredId(branchId),input as PosCreateProductInput))
   handle('pos:create-customer', (_event, input: unknown) => database!.createPosCustomer(input as PosCreateCustomerInput))
   handle('products:list', (_event, query: unknown) => database!.listProducts(query as ProductCatalogQuery))
   handle('products:save', (_event, branchId: unknown, input: unknown) => database!.saveProduct(requiredId(branchId),input as ProductSaveInput))
   handle('products:toggle-status', (_event, branchId: unknown, id: unknown) => database!.toggleProductStatus(requiredId(branchId),requiredId(id)))
+  handle('products:delete', (_event, branchId: unknown, id: unknown) => database!.deleteProduct(requiredId(branchId),requiredId(id)))
   handle('products:import-csv', (_event, branchId: unknown, csv: unknown) => {
     if(typeof csv!=='string') throw new Error('Invalid CSV file.')
     return database!.importProductsCsv(requiredId(branchId),csv)

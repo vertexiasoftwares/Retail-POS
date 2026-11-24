@@ -257,28 +257,32 @@
 }
 .inventory-table-scroll {
   overflow-x: auto;
+  min-height: 320px;
+  padding-bottom: 80px;
 }
 .inventory-table-card table {
   width: 100%;
   min-width: 930px;
   border-collapse: collapse;
   table-layout: auto;
-  font-size: 9px;
+  font-size: 13px;
 }
 .inventory-table-card th {
-  height: 38px;
-  padding: 0 8px;
+  height: 42px;
+  padding: 0 10px;
   text-align: left;
   color: #3d5878;
   background: #f2f6fb;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   white-space: nowrap;
 }
 .inventory-table-card td {
-  height: 43px;
-  padding: 3px 8px;
+  height: 50px;
+  padding: 3px 10px;
   border-top: 1px solid #e5ebf3;
   color: #3f5c7c;
+  font-size: 13px;
   white-space: nowrap;
 }
 .inventory-table-card td > small {

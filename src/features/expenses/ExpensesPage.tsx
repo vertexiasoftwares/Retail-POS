@@ -524,14 +524,14 @@ export default function ExpensesPage(props: PageProps) {
                     type="button"
                     className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 text-left text-xs font-semibold text-slate-700 transition-colors"
                   >
-                    <Icon name="cart" size={16} className="text-slate-400" />
+                    <Icon name="receipt" size={16} className="text-slate-400" />
                     <span>Import Expenses</span>
                   </button>
                   <button
                     type="button"
                     className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 text-left text-xs font-semibold text-slate-700 transition-colors"
                   >
-                    <Icon name="sale" size={16} className="text-slate-400" />
+                    <Icon name="download" size={16} className="text-slate-400" />
                     <span>Export Expenses</span>
                   </button>
                   <button

@@ -60,10 +60,10 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       refresh: async () => apiClient.post('/licensing/refresh'),
     },
     cloudLicense: {
-      status: async () => apiClient.get('/licensing/status'),
-      register: async (reg: any) => apiClient.post('/licensing/activate', reg),
-      activate: async (key: string, businessId?: string) => apiClient.post('/licensing/activate', { key, businessId }),
-      refresh: async () => apiClient.post('/licensing/refresh'),
+      status: async () => apiClient.get('/cloud-license/status'),
+      register: async (reg: any) => apiClient.post('/cloud-license/register', reg),
+      activate: async (key: string, businessId?: string) => apiClient.post('/cloud-license/activate', { key, businessId }),
+      refresh: async () => apiClient.post('/cloud-license/refresh'),
     },
     branches: {
       list: async () => apiClient.get('/branches/list'),
@@ -109,6 +109,7 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       getSnapshot: async (branchId: string) => apiClient.get(`/cash/snapshot?branchId=${encodeURIComponent(branchId)}`),
       closeShift: async (request: any) => apiClient.post('/cash/close-shift', request),
       move: async (request: any) => apiClient.post('/cash/move', request),
+      forceClose: async (request: any) => apiClient.post('/cash/force-close', request),
     },
     backup: {
       getStatus: async () => apiClient.get('/backup/status'),
@@ -156,6 +157,8 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       adjustStock: async (request: any) => apiClient.post('/retail/adjust-stock', request),
       receivePurchase: async (request: any) => apiClient.post('/retail/receive-purchase', request),
       paySupplier: async (request: any) => apiClient.post('/retail/pay-supplier', request),
+      createSupplier: async (name: string | Record<string, any>, phone?: string) =>
+        apiClient.post('/retail/create-supplier', typeof name === 'object' ? name : { name, phone }),
     },
     dashboard: {
       getSnapshot: async (query: any) => apiClient.post('/dashboard/snapshot', query),
@@ -169,8 +172,8 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
         apiClient.post('/pos/hold', { branchId, customerId, lines }),
       resumeHeldSale: async (id: string) => apiClient.post('/pos/resume-held', { id }),
       deleteHeldSale: async (id: string) => apiClient.delete(`/pos/held/${encodeURIComponent(id)}`),
-      openShift: async (branchId: string, openingCashPaisa: number, operationId?: string) => {
-        const res = await apiClient.post<{ shiftId: string }>('/pos/open-shift', { branchId, openingCashPaisa, operationId });
+      openShift: async (branchId: string, openingCashPaisa: number, operationId?: string, note?: string, counterId?: string) => {
+        const res = await apiClient.post<{ shiftId: string }>('/pos/open-shift', { branchId, openingCashPaisa, operationId, note, counterId });
         return res.shiftId;
       },
       createProduct: async (branchId: string, input: any) => apiClient.post('/pos/product', { branchId, input }),
@@ -180,6 +183,7 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       list: async (query: any) => apiClient.post('/products/list', query),
       save: async (branchId: string, input: any) => apiClient.post('/products/save', { branchId, input }),
       toggleStatus: async (branchId: string, id: string) => apiClient.post('/products/toggle-status', { branchId, id }),
+      delete: async (branchId: string, id: string) => apiClient.post('/products/delete', { branchId, id }),
       importCsv: async (branchId: string, csv: string) => apiClient.post('/products/import-csv', { branchId, csv }),
       exportCsv: async (branchId: string) => {
         const res = await apiClient.post<{ canceled: boolean; csv: string; filename: string }>('/products/export-csv', { branchId });
@@ -211,15 +215,13 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       },
     },
     zoom: {
-      setZoomFactor: (factor: number) => {
+      setZoomFactor: (_factor: number) => {
         if (typeof document !== 'undefined') {
-          (document.body.style as any).zoom = factor;
+          document.body.style.zoom = '';
+          document.documentElement.style.zoom = '';
         }
       },
       getZoomFactor: () => {
-        if (typeof document !== 'undefined') {
-          return Number((document.body.style as any).zoom) || 1.0;
-        }
         return 1.0;
       },
       onZoomFactorChange: () => () => {},
