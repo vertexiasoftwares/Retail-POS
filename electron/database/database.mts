@@ -24,11 +24,16 @@ import type {
   ProductCatalogRecord,
   ProductCatalogResult,
   ProductSaveInput,
+  ReturnHistoryRow,
+  ReturnsListQuery,
+  ReturnsSnapshot,
   SalesDetail,
   SalesListQuery,
   SalesListRow,
   SalesReturnRequest,
   SalesSnapshot,
+  ManualReturnRequest,
+  ManualReturnResult,
 } from '../../src/types/desktop-api.js'
 import { BranchRepository } from './branches.mjs'
 import { TransferRepository } from './transfers.mjs'
@@ -39,7 +44,7 @@ import { ReportsRepository } from './reports.mjs'
 import { CashRepository } from './cash.mjs'
 import { AccountsRepository, expenseFacts } from './accounts.mjs'
 import { RetailRepository } from './retail.mjs'
-import { nextDocumentNumber, postOperation, requireSafeInteger } from './posting.mjs'
+import { nextDocumentNumber, nextManualReturnNumber, postOperation, requireBusinessDate, requireSafeInteger, requireText } from './posting.mjs'
 
 type SqlRow = Record<string, string | number | null>
 
@@ -335,7 +340,8 @@ export class VertexiaDatabase {
     const branchId = String(selectedBranch?.id ?? BRANCH_ID)
     const range = resolveRange(today, query.dateRange)
     const saleFacts = `(SELECT branch_id,business_date,completed_at AS occurred_at,total_paisa AS amount,cost_paisa AS cost FROM sales WHERE status<>'voided'
-      UNION ALL SELECT branch_id,date(occurred_at,'+5 hours'),occurred_at,-total_paisa,-cost_paisa FROM sale_returns)`
+      UNION ALL SELECT branch_id,date(occurred_at,'+5 hours'),occurred_at,-total_paisa,-cost_paisa FROM sale_returns
+      UNION ALL SELECT branch_id,business_date,occurred_at,-total_paisa,-cost_paisa FROM manual_returns)`
     const total = (start: string, end: string) => this.connection.prepare(`SELECT COALESCE(SUM(amount),0) AS sales, COALESCE(SUM(amount-cost),0) AS profit FROM ${saleFacts} WHERE branch_id=? AND business_date BETWEEN ? AND ?`).get(branchId, start, end) as SqlRow
     const current = total(range.start, range.end)
     const previous = total(range.previousStart, range.previousEnd)
@@ -440,8 +446,35 @@ export class VertexiaDatabase {
         shift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId) as SqlRow | undefined
       }
       if (!shift) throw new Error('Open a cash shift before completing a sale.')
-      const customer = this.connection.prepare('SELECT id,name,is_walk_in FROM customers WHERE id=? AND business_id=? AND is_active=1').get(request.customerId,String(branch.business_id)) as SqlRow | undefined
+      let customer = this.connection.prepare('SELECT id,name,phone,is_walk_in FROM customers WHERE id=? AND business_id=? AND is_active=1').get(request.customerId,String(branch.business_id)) as SqlRow | undefined
       if (!customer) throw new Error('Select a valid customer.')
+      const rawCustomerName = typeof request.customerName === 'string' ? request.customerName.trim().slice(0, 100) : ''
+      const rawCustomerPhone = typeof request.customerPhone === 'string' ? request.customerPhone.trim().slice(0, 25) : ''
+      if (Number(customer.is_walk_in) === 1 && rawCustomerName) {
+        let existing: SqlRow | undefined
+        if (rawCustomerPhone) {
+          existing = this.connection.prepare('SELECT id,name,phone,is_walk_in FROM customers WHERE business_id=? AND phone=? AND is_active=1 LIMIT 1').get(String(branch.business_id), rawCustomerPhone) as SqlRow | undefined
+          if (!existing) {
+            existing = this.connection.prepare("SELECT id,name,phone,is_walk_in FROM customers WHERE business_id=? AND is_walk_in=0 AND LOWER(name)=LOWER(?) AND (phone IS NULL OR phone='') AND is_active=1 LIMIT 1").get(String(branch.business_id), rawCustomerName) as SqlRow | undefined
+          }
+        } else {
+          existing = this.connection.prepare('SELECT id,name,phone,is_walk_in FROM customers WHERE business_id=? AND is_walk_in=0 AND LOWER(name)=LOWER(?) AND is_active=1 LIMIT 1').get(String(branch.business_id), rawCustomerName) as SqlRow | undefined
+        }
+        if (existing) {
+          if (rawCustomerPhone && !existing.phone) {
+            try {
+              this.connection.prepare('UPDATE customers SET phone=? WHERE id=?').run(rawCustomerPhone, String(existing.id))
+              existing.phone = rawCustomerPhone
+            } catch {}
+          }
+          customer = existing
+        } else {
+          const newId = `customer-${randomUUID()}`
+          this.connection.prepare('INSERT INTO customers VALUES (?, ?, ?, ?, ?, ?, ?)').run(newId, String(branch.business_id), rawCustomerName, rawCustomerPhone || null, 0, 1, this.now().toISOString())
+          customer = { id: newId, name: rawCustomerName, phone: rawCustomerPhone || null, is_walk_in: 0 }
+        }
+      }
+      const effectiveCustomerId = String(customer.id)
       if (request.paymentMethod === 'Udhaar' && Number(customer.is_walk_in) === 1) throw new Error('Select a registered customer for Udhaar.')
       const lines = this.priceLines(request.branchId,request.lines)
       const subtotalPaisa = lines.reduce((sum,line) => sum + line.subtotalPaisa,0)
@@ -458,7 +491,7 @@ export class VertexiaDatabase {
       const completedAt = now.toISOString()
       const invoiceNumber = nextDocumentNumber(this.connection, request.branchId, 'sale', date)
       const saleId = `sale-${randomUUID()}`
-      this.connection.prepare('INSERT INTO sales (id, business_id, branch_id, invoice_number, business_date, customer_id, cashier_id, subtotal_paisa, discount_paisa, total_paisa, cost_paisa, status, completed_at, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(saleId,String(branch.business_id),request.branchId,invoiceNumber,date,request.customerId,actorId,subtotalPaisa,discountPaisa,totalPaisa,costPaisa,'completed',completedAt,String(shift.id))
+      this.connection.prepare('INSERT INTO sales (id, business_id, branch_id, invoice_number, business_date, customer_id, cashier_id, subtotal_paisa, discount_paisa, total_paisa, cost_paisa, status, completed_at, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(saleId,String(branch.business_id),request.branchId,invoiceNumber,date,effectiveCustomerId,actorId,subtotalPaisa,discountPaisa,totalPaisa,costPaisa,'completed',completedAt,String(shift.id))
       const insertItem = this.connection.prepare('INSERT INTO sale_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       const updateStock = this.connection.prepare('UPDATE stock_levels SET quantity_milli=quantity_milli-?,updated_at=? WHERE branch_id=? AND product_id=? AND quantity_milli>=?')
       const insertMovement = this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -473,11 +506,11 @@ export class VertexiaDatabase {
       }
       const paidAmount = request.paymentMethod === 'Udhaar' ? 0 : totalPaisa
       this.connection.prepare('INSERT INTO sale_payments VALUES (?, ?, ?, ?)').run(`sale-payment-${randomUUID()}`,saleId,request.paymentMethod,paidAmount)
-      if (request.paymentMethod === 'Udhaar') this.connection.prepare('INSERT INTO customer_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(`customer-ledger-${randomUUID()}`,request.branchId,request.customerId,'sale',totalPaisa,0,saleId,completedAt)
+      if (request.paymentMethod === 'Udhaar') this.connection.prepare('INSERT INTO customer_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(`customer-ledger-${randomUUID()}`,request.branchId,effectiveCustomerId,'sale',totalPaisa,0,saleId,completedAt)
       if (request.paymentMethod === 'Cash') this.connection.prepare('INSERT INTO cash_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`cash-${randomUUID()}`,String(shift.id),request.branchId,date,'cash_sale','in',totalPaisa,'Cash',saleId,completedAt)
       this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,request.branchId,actorId,'Sale','sale',saleId,'Sale completed',invoiceNumber,completedAt)
       const cashReceivedPaisa = request.paymentMethod === 'Cash' ? request.cashReceivedPaisa : totalPaisa
-      return { saleId,invoiceNumber,completedAt,customerName:String(customer.name),paymentMethod:request.paymentMethod,subtotalPaisa,discountPaisa,totalPaisa,cashReceivedPaisa,changePaisa:request.paymentMethod === 'Cash' ? cashReceivedPaisa-totalPaisa : 0,lines:lines.map(line => ({ name:line.name,quantityMilli:line.quantityMilli,unitPricePaisa:line.unitPricePaisa,discountPaisa:line.discountPaisa,lineTotalPaisa:line.lineTotalPaisa })) }
+      return { saleId,invoiceNumber,completedAt,customerName:String(customer.name),customerPhone:customer.phone===null||customer.phone===undefined?null:String(customer.phone),paymentMethod:request.paymentMethod,subtotalPaisa,discountPaisa,totalPaisa,cashReceivedPaisa,changePaisa:request.paymentMethod === 'Cash' ? cashReceivedPaisa-totalPaisa : 0,lines:lines.map(line => ({ name:line.name,quantityMilli:line.quantityMilli,unitPricePaisa:line.unitPricePaisa,discountPaisa:line.discountPaisa,lineTotalPaisa:line.lineTotalPaisa })) }
     })
   }
 
@@ -569,14 +602,16 @@ export class VertexiaDatabase {
 
   createPosCustomer(input: PosCreateCustomerInput): PosCustomer {
     const name = input.name?.trim()
-    const phone = input.phone?.trim()
+    const phone = input.phone?.trim() || ''
     if (!name || name.length > 100) throw new Error('Enter a valid customer name.')
-    if (!phone || phone.length < 7 || phone.length > 25) throw new Error('Enter a valid phone number.')
-    const existing = this.connection.prepare('SELECT id FROM customers WHERE business_id=? AND phone=?').get(this.businessId,phone)
-    if (existing) throw new Error('A customer with this phone number already exists.')
+    if (phone && (phone.length < 7 || phone.length > 25)) throw new Error('Enter a valid phone number (7–25 characters).')
+    if (phone) {
+      const existing = this.connection.prepare('SELECT id FROM customers WHERE business_id=? AND phone=?').get(this.businessId, phone)
+      if (existing) throw new Error('A customer with this phone number already exists.')
+    }
     const id = `customer-${randomUUID()}`
-    this.connection.prepare('INSERT INTO customers VALUES (?, ?, ?, ?, ?, ?, ?)').run(id,this.businessId,name,phone,0,1,this.now().toISOString())
-    return { id,name,phone,isWalkIn:false,balancePaisa:0 }
+    this.connection.prepare('INSERT INTO customers VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, this.businessId, name, phone || null, 0, 1, this.now().toISOString())
+    return { id, name, phone: phone || null, isWalkIn: false, balancePaisa: 0 }
   }
 
   private normalizeProductInput(input: ProductSaveInput) {
@@ -670,19 +705,41 @@ export class VertexiaDatabase {
   }
 
   deleteProduct(branchId: string, id: string): { success: boolean; archived: boolean } {
-    const row = this.connection.prepare('SELECT p.id, p.name FROM products p JOIN stock_levels sl ON sl.product_id=p.id WHERE p.id=? AND sl.branch_id=?').get(id, branchId) as SqlRow | undefined
+    const branch = this.connection.prepare('SELECT business_id FROM branches WHERE id=? AND is_active=1').get(branchId) as SqlRow | undefined
+    if (!branch) throw new Error('The selected branch is unavailable.')
+    const row = this.connection.prepare('SELECT p.id, p.name, p.is_active FROM products p JOIN stock_levels sl ON sl.product_id=p.id WHERE p.id=? AND sl.branch_id=? AND p.business_id=?').get(id, branchId, String(branch.business_id)) as SqlRow | undefined
     if (!row) throw new Error('Product was not found.')
+
+    const historyRow = this.connection.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM sale_items WHERE product_id=?) AS sale_count,
+        (SELECT COUNT(*) FROM purchase_items WHERE product_id=?) AS purchase_count,
+        (SELECT COUNT(*) FROM sale_return_items WHERE product_id=? OR sale_item_id IN (SELECT id FROM sale_items WHERE product_id=?)) AS return_count,
+        (SELECT COUNT(*) FROM manual_return_items WHERE product_id=?) AS manual_return_count,
+        (SELECT COUNT(*) FROM stock_movements WHERE product_id=?) AS movement_count,
+        (SELECT COUNT(*) FROM stock_transfer_items WHERE product_id=?) AS transfer_count
+    `).get(id, id, id, id, id, id, id) as SqlRow
+
+    const totalHistory =
+      Number(historyRow.sale_count) +
+      Number(historyRow.purchase_count) +
+      Number(historyRow.return_count) +
+      Number(historyRow.manual_return_count) +
+      Number(historyRow.movement_count) +
+      Number(historyRow.transfer_count)
+
+    if (totalHistory > 0) {
+      throw new Error('This product has sales, purchase, return, transfer, or stock movement history and cannot be permanently deleted. Deactivate it instead to keep your financial records intact.')
+    }
+
+    const stockRow = this.connection.prepare('SELECT COALESCE(SUM(ABS(quantity_milli)), 0) AS qty FROM stock_levels WHERE product_id=?').get(id) as SqlRow | undefined
+    if (stockRow && Number(stockRow.qty) > 0) {
+      throw new Error('This product still has stock on hand and cannot be permanently deleted. Deactivate it instead.')
+    }
 
     const now = this.now().toISOString()
     this.connection.exec('BEGIN IMMEDIATE')
     try {
-      this.connection.prepare('DELETE FROM stock_value_movements WHERE movement_id IN (SELECT id FROM stock_movements WHERE product_id=?)').run(id)
-      this.connection.prepare('DELETE FROM sale_item_costs WHERE sale_item_id IN (SELECT id FROM sale_items WHERE product_id=?)').run(id)
-      this.connection.prepare('DELETE FROM sale_return_items WHERE product_id=? OR sale_item_id IN (SELECT id FROM sale_items WHERE product_id=?)').run(id, id)
-      this.connection.prepare('DELETE FROM stock_transfer_items WHERE product_id=?').run(id)
-      this.connection.prepare('DELETE FROM sale_items WHERE product_id=?').run(id)
-      this.connection.prepare('DELETE FROM purchase_items WHERE product_id=?').run(id)
-      this.connection.prepare('DELETE FROM stock_movements WHERE product_id=?').run(id)
       this.connection.prepare('DELETE FROM stock_values WHERE product_id=?').run(id)
       this.connection.prepare('DELETE FROM stock_levels WHERE product_id=?').run(id)
       this.connection.prepare('DELETE FROM products WHERE id=?').run(id)
@@ -730,26 +787,44 @@ export class VertexiaDatabase {
     return [header,...rows].map(row => row.map(csvCell).join(',')).join('\r\n')
   }
 
-  private resolveSalesPeriod(period: SalesListQuery['period']) {
+  private resolveSalesPeriod(period: SalesListQuery['period'], dateFrom?: string, dateTo?: string) {
     const today=businessDate(this.now())
     let start=today
+    let end=today
     let label='Today'
-    if(period==='this_week'){start=startOfWeek(today);label='This Week'}
-    else if(period==='this_month'){start=`${today.slice(0,7)}-01`;label='This Month'}
-    const span=Math.round((new Date(`${today}T12:00:00Z`).getTime()-new Date(`${start}T12:00:00Z`).getTime())/86_400_000)+1
+    if(period==='yesterday'){
+      start=addDays(today,-1);end=start;label='Yesterday'
+    } else if(period==='this_week'){
+      start=startOfWeek(today);label='This Week'
+    } else if(period==='this_month'){
+      start=`${today.slice(0,7)}-01`;label='This Month'
+    } else if(period==='last_month'){
+      const [y,m]=today.split('-').map(Number)
+      const prevStart=new Date(Date.UTC(y,m-2,1,12))
+      const prevEnd=new Date(Date.UTC(y,m-1,0,12))
+      start=prevStart.toISOString().slice(0,10)
+      end=prevEnd.toISOString().slice(0,10)
+      label='Last Month'
+    } else if(period==='custom' && dateFrom && dateTo){
+      start=requireBusinessDate(dateFrom)
+      end=requireBusinessDate(dateTo)
+      if(start>end) throw new Error('Start date cannot be after end date.')
+      label=`${start} to ${end}`
+    }
+    const span=Math.max(1,Math.round((new Date(`${end}T12:00:00Z`).getTime()-new Date(`${start}T12:00:00Z`).getTime())/86_400_000)+1)
     const previousEnd=addDays(start,-1)
-    return {start,end:today,previousStart:addDays(previousEnd,1-span),previousEnd,label,comparison:period==='today'?'vs yesterday':period==='this_week'?'vs previous period':'vs previous period'}
+    return {start,end,previousStart:addDays(previousEnd,1-span),previousEnd,label,comparison:period==='today'?'vs yesterday':period==='yesterday'?'vs previous day':'vs previous period'}
   }
 
   private salesRows(query: SalesListQuery, paginate=true): {rows:SalesListRow[];total:number;page:number;pageSize:number} {
     if(!query || typeof query.branchId!=='string') throw new Error('Invalid sales query.')
-    const range=this.resolveSalesPeriod(query.period)
+    const range=this.resolveSalesPeriod(query.period, query.dateFrom, query.dateTo)
     const page=Math.max(1,Math.trunc(query.page)||1)
     const pageSize=Math.min(100,Math.max(5,Math.trunc(query.pageSize)||10))
     const where=['s.branch_id=?','s.business_date BETWEEN ? AND ?']
     const params:(string|number)[]=[query.branchId,range.start,range.end]
     const search=query.search?.trim()
-    if(search){const term=`%${search}%`;where.push(`(s.invoice_number LIKE ? OR c.name LIKE ? OR EXISTS (SELECT 1 FROM sale_items sx WHERE sx.sale_id=s.id AND sx.product_name_snapshot LIKE ?))`);params.push(term,term,term)}
+    if(search){const term=`%${search}%`;where.push(`(s.invoice_number LIKE ? OR c.name LIKE ? OR COALESCE(c.phone,'') LIKE ? OR EXISTS (SELECT 1 FROM sale_items sx WHERE sx.sale_id=s.id AND sx.product_name_snapshot LIKE ?))`);params.push(term,term,term,term)}
     if(query.paymentMethod&&query.paymentMethod!=='all'){where.push(`EXISTS (SELECT 1 FROM sale_payments spx WHERE spx.sale_id=s.id AND spx.method=?)`);params.push(query.paymentMethod)}
     const returned=`COALESCE(rt.returned_paisa,0)`
     const derivedStatus=`CASE WHEN s.status='voided' THEN 'voided' WHEN s.status='returned' OR ${returned}>=s.total_paisa THEN 'returned' WHEN ${returned}>0 THEN 'partially_returned' ELSE 'completed' END`
@@ -759,18 +834,18 @@ export class VertexiaDatabase {
     const total=Number((this.connection.prepare(`SELECT COUNT(*) AS value ${from} WHERE ${clause}`).get(...params) as SqlRow).value)
     const paging=paginate?' LIMIT ? OFFSET ?':''
     const rowParams=paginate?[...params,pageSize,(page-1)*pageSize]:params
-    const raw=this.connection.prepare(`SELECT s.id,s.invoice_number,s.completed_at,c.name AS customer_name,u.name AS cashier_name,(SELECT COUNT(*) FROM sale_items si WHERE si.sale_id=s.id) AS item_count,s.total_paisa,${returned} AS returned_paisa,s.total_paisa-${returned} AS net_paisa,COALESCE((SELECT GROUP_CONCAT(method,', ') FROM sale_payments sp WHERE sp.sale_id=s.id),'Unpaid') AS payment_method,${derivedStatus} AS derived_status ${from} WHERE ${clause} ORDER BY s.completed_at DESC${paging}`).all(...rowParams) as SqlRow[]
-    const rows=raw.map(row => ({id:String(row.id),invoiceNumber:String(row.invoice_number),completedAt:String(row.completed_at),customerName:String(row.customer_name),cashierName:String(row.cashier_name),itemCount:Number(row.item_count),totalPaisa:Number(row.total_paisa),returnedPaisa:Number(row.returned_paisa),netPaisa:Number(row.net_paisa),paymentMethod:String(row.payment_method),status:String(row.derived_status) as SalesListRow['status']}))
+    const raw=this.connection.prepare(`SELECT s.id,s.invoice_number,s.completed_at,c.name AS customer_name,u.name AS cashier_name,(SELECT COUNT(*) FROM sale_items si WHERE si.sale_id=s.id) AS item_count,(SELECT GROUP_CONCAT(si.product_name_snapshot, ', ') FROM sale_items si WHERE si.sale_id=s.id) AS item_names,s.total_paisa,${returned} AS returned_paisa,s.total_paisa-${returned} AS net_paisa,COALESCE((SELECT GROUP_CONCAT(method,', ') FROM sale_payments sp WHERE sp.sale_id=s.id),'Unpaid') AS payment_method,${derivedStatus} AS derived_status ${from} WHERE ${clause} ORDER BY s.completed_at DESC${paging}`).all(...rowParams) as SqlRow[]
+    const rows=raw.map(row => ({id:String(row.id),invoiceNumber:String(row.invoice_number),completedAt:String(row.completed_at),customerName:String(row.customer_name),cashierName:String(row.cashier_name),itemCount:Number(row.item_count),itemNames:row.item_names?String(row.item_names):'',totalPaisa:Number(row.total_paisa),returnedPaisa:Number(row.returned_paisa),netPaisa:Number(row.net_paisa),paymentMethod:String(row.payment_method),status:String(row.derived_status) as SalesListRow['status']}))
     return {rows,total,page,pageSize}
   }
 
   getSalesSnapshot(query: SalesListQuery): SalesSnapshot {
     const branch=this.connection.prepare('SELECT id FROM branches WHERE id=? AND is_active=1').get(query.branchId)
     if(!branch) throw new Error('The selected branch is unavailable.')
-    const range=this.resolveSalesPeriod(query.period)
+    const range=this.resolveSalesPeriod(query.period, query.dateFrom, query.dateTo)
     const scalar=(sql:string,...params:(string|number)[])=>Number((this.connection.prepare(sql).get(...params) as SqlRow|undefined)?.value??0)
     const gross=(start:string,end:string)=>scalar(`SELECT COALESCE(SUM(total_paisa),0) AS value FROM sales WHERE branch_id=? AND status<>'voided' AND business_date BETWEEN ? AND ?`,query.branchId,start,end)
-    const returns=(start:string,end:string)=>scalar(`SELECT COALESCE(SUM(total_paisa),0) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours') BETWEEN ? AND ?`,query.branchId,start,end)
+    const returns=(start:string,end:string)=>scalar(`SELECT COALESCE(SUM(total_paisa),0) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours') BETWEEN ? AND ?`,query.branchId,start,end)+scalar(`SELECT COALESCE(SUM(total_paisa),0) AS value FROM manual_returns WHERE branch_id=? AND business_date BETWEEN ? AND ?`,query.branchId,start,end)
     const count=(start:string,end:string)=>scalar(`SELECT COUNT(*) AS value FROM sales WHERE branch_id=? AND status<>'voided' AND business_date BETWEEN ? AND ?`,query.branchId,start,end)
     const currentGross=gross(range.start,range.end),currentReturns=returns(range.start,range.end),currentCount=count(range.start,range.end)
     const previousGross=gross(range.previousStart,range.previousEnd),previousReturns=returns(range.previousStart,range.previousEnd),previousCount=count(range.previousStart,range.previousEnd)
@@ -780,22 +855,25 @@ export class VertexiaDatabase {
     const salesResult=this.salesRows(query)
     let labels:string[]
     let saleMap:Map<string,number>,returnMap:Map<string,number>
-    if(query.period==='today') {
+    if(query.period==='today'||query.period==='yesterday'||range.start===range.end) {
       const hours=[8,10,12,14,16,18,20]
       labels=hours.map(hour=>`${hour>12?hour-12:hour} ${hour>=12?'PM':'AM'}`)
       const saleRows=this.connection.prepare(`SELECT CAST(strftime('%H',completed_at,'+5 hours') AS INTEGER) AS bucket,SUM(total_paisa) AS value FROM sales WHERE branch_id=? AND status<>'voided' AND business_date=? GROUP BY bucket`).all(query.branchId,range.end) as SqlRow[]
-      const returnRows=this.connection.prepare(`SELECT CAST(strftime('%H',occurred_at,'+5 hours') AS INTEGER) AS bucket,SUM(total_paisa) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours')=? GROUP BY bucket`).all(query.branchId,range.end) as SqlRow[]
+      const returnRows=this.connection.prepare(`SELECT bucket, SUM(value) AS value FROM (SELECT CAST(strftime('%H',occurred_at,'+5 hours') AS INTEGER) AS bucket,SUM(total_paisa) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours')=? GROUP BY bucket UNION ALL SELECT CAST(strftime('%H',occurred_at,'+5 hours') AS INTEGER) AS bucket,SUM(total_paisa) AS value FROM manual_returns WHERE branch_id=? AND business_date=? GROUP BY bucket) GROUP BY bucket`).all(query.branchId,range.end,query.branchId,range.end) as SqlRow[]
       const bucket=(rows:SqlRow[])=>new Map(hours.map(hour=>[`${hour>12?hour-12:hour} ${hour>=12?'PM':'AM'}`,rows.filter(row=>Number(row.bucket)>=hour&&Number(row.bucket)<hour+2).reduce((sum,row)=>sum+Number(row.value),0)]))
       saleMap=bucket(saleRows);returnMap=bucket(returnRows)
     } else {
       const dates:string[]=[];for(let date=range.start;date<=range.end;date=addDays(date,1))dates.push(date)
       labels=dates
       saleMap=new Map((this.connection.prepare(`SELECT business_date AS label,SUM(total_paisa) AS value FROM sales WHERE branch_id=? AND status<>'voided' AND business_date BETWEEN ? AND ? GROUP BY business_date`).all(query.branchId,range.start,range.end) as SqlRow[]).map(row=>[String(row.label),Number(row.value)]))
-      returnMap=new Map((this.connection.prepare(`SELECT date(occurred_at,'+5 hours') AS label,SUM(total_paisa) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours') BETWEEN ? AND ? GROUP BY label`).all(query.branchId,range.start,range.end) as SqlRow[]).map(row=>[String(row.label),Number(row.value)]))
+      const billRetRows=this.connection.prepare(`SELECT date(occurred_at,'+5 hours') AS label,SUM(total_paisa) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours') BETWEEN ? AND ? GROUP BY label`).all(query.branchId,range.start,range.end) as SqlRow[]
+      const manRetRows=this.connection.prepare(`SELECT business_date AS label,SUM(total_paisa) AS value FROM manual_returns WHERE branch_id=? AND business_date BETWEEN ? AND ? GROUP BY label`).all(query.branchId,range.start,range.end) as SqlRow[]
+      returnMap=new Map()
+      for(const row of [...billRetRows,...manRetRows]) returnMap.set(String(row.label),(returnMap.get(String(row.label))??0)+Number(row.value))
     }
-    const chart=labels.map(label=>({label:query.period==='today'?label:labelDate(label),valuePaisa:saleMap.get(label)??0,returnedPaisa:returnMap.get(label)??0}))
+    const chart=labels.map(label=>({label:(query.period==='today'||query.period==='yesterday'||range.start===range.end)?label:labelDate(label),valuePaisa:saleMap.get(label)??0,returnedPaisa:returnMap.get(label)??0}))
     const paymentSales=this.connection.prepare(`SELECT sp.method,SUM(s.total_paisa) AS value FROM sales s JOIN sale_payments sp ON sp.sale_id=s.id WHERE s.branch_id=? AND s.status<>'voided' AND s.business_date BETWEEN ? AND ? GROUP BY sp.method`).all(query.branchId,range.start,range.end) as SqlRow[]
-    const paymentReturns=this.connection.prepare(`SELECT refund_method AS method,SUM(total_paisa) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours') BETWEEN ? AND ? GROUP BY refund_method`).all(query.branchId,range.start,range.end) as SqlRow[]
+    const paymentReturns=this.connection.prepare(`SELECT method,SUM(value) AS value FROM (SELECT refund_method AS method,SUM(total_paisa) AS value FROM sale_returns WHERE branch_id=? AND date(occurred_at,'+5 hours') BETWEEN ? AND ? GROUP BY refund_method UNION ALL SELECT refund_method AS method,SUM(total_paisa) AS value FROM manual_returns WHERE branch_id=? AND business_date BETWEEN ? AND ? GROUP BY refund_method) GROUP BY method`).all(query.branchId,range.start,range.end,query.branchId,range.start,range.end) as SqlRow[]
     const paymentMap=new Map<string,number>();for(const row of paymentSales)paymentMap.set(String(row.method),Number(row.value));for(const row of paymentReturns)paymentMap.set(String(row.method),(paymentMap.get(String(row.method))??0)-Number(row.value))
     const payments=Array.from(paymentMap,([method,amountPaisa])=>({method,amountPaisa:Math.max(0,amountPaisa)})).sort((a,b)=>b.amountPaisa-a.amountPaisa)
     return {businessDate:businessDate(this.now()),rangeLabel:range.label,comparisonLabel:range.comparison,totalSalesPaisa,salesChangePercent:percentageChange(totalSalesPaisa,previousSales),transactionCount:currentCount,transactionChangePercent:percentageChange(currentCount,previousCount),averageOrderPaisa,averageChangePercent:percentageChange(averageOrderPaisa,previousAverage),returnsPaisa:currentReturns,returnsChangePercent:percentageChange(currentReturns,previousReturns),chart,payments,sales:salesResult.rows,total:salesResult.total,page:salesResult.page,pageSize:salesResult.pageSize,pageCount:Math.max(1,Math.ceil(salesResult.total/salesResult.pageSize))}
@@ -813,8 +891,9 @@ export class VertexiaDatabase {
 
   createSalesReturn(request:SalesReturnRequest) {
     if(!request||typeof request.branchId!=='string'||typeof request.saleId!=='string') throw new Error('Invalid return request.')
-    const reason=request.reason?.trim()
-    if(!reason||reason.length<3||reason.length>250) throw new Error('Enter a return reason between 3 and 250 characters.')
+    if(request.reason!==undefined&&request.reason!==null&&typeof request.reason!=='string') throw new Error('Invalid return reason.')
+    const reason=typeof request.reason==='string'?request.reason.trim():''
+    if(reason.length>250) throw new Error('Return reason cannot exceed 250 characters.')
     if(!Array.isArray(request.lines)||!request.lines.length) throw new Error('Select at least one item to return.')
     return postOperation(this.connection, request.branchId, request.operationId, 'sale.return', request, this.now().toISOString(), () => {
       const sale=this.connection.prepare(`SELECT s.id,s.status,s.customer_id,s.business_date,(SELECT method FROM sale_payments WHERE sale_id=s.id LIMIT 1) AS payment_method FROM sales s WHERE s.id=? AND s.branch_id=?`).get(request.saleId,request.branchId) as SqlRow|undefined
@@ -863,6 +942,223 @@ export class VertexiaDatabase {
       this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`,request.branchId,actorId,'Sale Return','sale_return',returnId,'Sale return completed',`${returnNumber} · ${String((this.connection.prepare('SELECT invoice_number FROM sales WHERE id=?').get(request.saleId) as SqlRow).invoice_number)}`,occurredAt)
       return{returnId,returnNumber,refundMethod:paymentMethod,totalPaisa,occurredAt}
     })
+  }
+
+  findSaleByInvoiceNumber(branchId: string, invoiceQuery: string): SalesDetail | null {
+    const clean = invoiceQuery?.trim()
+    if (!clean) return null
+    let row = this.connection.prepare('SELECT id FROM sales WHERE branch_id=? AND LOWER(invoice_number)=LOWER(?) LIMIT 1').get(branchId, clean) as SqlRow | undefined
+    if (!row && /^\d+$/.test(clean)) {
+      const padded = `BILL-${clean.padStart(3, '0')}`
+      row = this.connection.prepare('SELECT id FROM sales WHERE branch_id=? AND LOWER(invoice_number)=LOWER(?) LIMIT 1').get(branchId, padded) as SqlRow | undefined
+      if (!row) {
+        row = this.connection.prepare('SELECT id FROM sales WHERE branch_id=? AND invoice_number LIKE ? ORDER BY completed_at DESC LIMIT 1').get(branchId, `%-${clean.padStart(3, '0')}`) as SqlRow | undefined
+      }
+    }
+    if (!row) {
+      row = this.connection.prepare('SELECT id FROM sales WHERE branch_id=? AND LOWER(invoice_number) LIKE LOWER(?) ORDER BY completed_at DESC LIMIT 1').get(branchId, `%${clean}%`) as SqlRow | undefined
+    }
+    if (!row) return null
+    return this.getSalesDetail(branchId, String(row.id))
+  }
+
+  createManualReturn(request: ManualReturnRequest): ManualReturnResult {
+    if (!request || typeof request.branchId !== 'string' || typeof request.customerId !== 'string') {
+      throw new Error('Invalid manual return request.')
+    }
+    const allowedMethods = new Set(['Cash', 'Card', 'JazzCash', 'Easypaisa', 'Udhaar'])
+    if (!allowedMethods.has(request.refundMethod)) throw new Error('Select a valid refund method.')
+    if (request.reason !== undefined && request.reason !== null && typeof request.reason !== 'string') {
+      throw new Error('Invalid return reason.')
+    }
+    const reason = typeof request.reason === 'string' ? request.reason.trim() : ''
+    if (reason.length > 250) throw new Error('Return reason cannot exceed 250 characters.')
+    if (!Array.isArray(request.lines) || !request.lines.length) throw new Error('Add at least one product to return.')
+
+    return postOperation(this.connection, request.branchId, request.operationId, 'sale.manual_return', request, this.now().toISOString(), () => {
+      const branch = this.connection.prepare('SELECT business_id FROM branches WHERE id=? AND is_active=1').get(request.branchId) as SqlRow | undefined
+      if (!branch) throw new Error('The selected branch is unavailable.')
+      const customer = this.connection.prepare('SELECT id, is_walk_in FROM customers WHERE id=? AND business_id=? AND is_active=1').get(request.customerId, String(branch.business_id)) as SqlRow | undefined
+      if (!customer) throw new Error('Select a valid customer.')
+      if (request.refundMethod === 'Udhaar' && Number(customer.is_walk_in) === 1) {
+        throw new Error('Select a registered customer when refunding to Udhaar.')
+      }
+
+      const seen = new Set<string>()
+      const lines = request.lines.map(input => {
+        if (!input || typeof input.productId !== 'string' || seen.has(input.productId)) {
+          throw new Error('Return contains a duplicate or invalid product.')
+        }
+        seen.add(input.productId)
+        if (!Number.isSafeInteger(input.quantityMilli) || input.quantityMilli <= 0) {
+          throw new Error('Return quantity must be greater than zero.')
+        }
+        if (!Number.isSafeInteger(input.unitPricePaisa) || input.unitPricePaisa < 0) {
+          throw new Error('Refund unit price must be zero or greater.')
+        }
+        const product = this.connection.prepare(`
+          SELECT p.id, p.name, p.purchase_price_paisa, sl.quantity_milli
+          FROM products p
+          JOIN stock_levels sl ON sl.product_id=p.id AND sl.branch_id=?
+          WHERE p.id=? AND p.business_id=? AND p.is_active=1
+        `).get(request.branchId, input.productId, String(branch.business_id)) as SqlRow | undefined
+        if (!product) throw new Error('Selected product was not found or is inactive.')
+        const refundPaisa = requireSafeInteger(Math.round(input.unitPricePaisa * input.quantityMilli / 1000), 'Refund amount')
+        const costPaisa = requireSafeInteger(proportionalCost(Number(product.purchase_price_paisa), input.quantityMilli), 'Return cost')
+        return {
+          productId: String(product.id),
+          name: String(product.name),
+          quantityMilli: input.quantityMilli,
+          unitPricePaisa: input.unitPricePaisa,
+          refundPaisa,
+          costPaisa,
+        }
+      })
+
+      const totalPaisa = lines.reduce((sum, l) => sum + l.refundPaisa, 0)
+      const costPaisa = lines.reduce((sum, l) => sum + l.costPaisa, 0)
+      if (totalPaisa <= 0) throw new Error('Total refund amount must be greater than zero.')
+
+      const now = this.now()
+      const occurredAt = now.toISOString()
+      const date = businessDate(now)
+      const actorId = this.getActorId()
+      let shift: SqlRow | undefined
+      if (request.refundMethod === 'Cash') {
+        shift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND cashier_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId, actorId) as SqlRow | undefined
+        if (!shift && !requestActorStorage.getStore()) {
+          shift = this.connection.prepare(`SELECT id FROM cash_shifts WHERE branch_id=? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(request.branchId) as SqlRow | undefined
+        }
+        if (!shift) throw new Error('Open a cash shift before issuing a cash refund.')
+      }
+
+      const returnId = `manual-return-${randomUUID()}`
+      const returnNumber = nextManualReturnNumber(this.connection, request.branchId)
+
+      this.connection.prepare(`
+        INSERT INTO manual_returns (id, branch_id, customer_id, return_number, business_date, reason, refund_method, total_paisa, cost_paisa, created_by, occurred_at, shift_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(returnId, request.branchId, request.customerId, returnNumber, date, reason, request.refundMethod, totalPaisa, costPaisa, actorId, occurredAt, shift ? String(shift.id) : null)
+
+      const insertItem = this.connection.prepare('INSERT INTO manual_return_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      for (const line of lines) {
+        const movementId = `stock-${randomUUID()}`
+        insertItem.run(`manual-return-item-${randomUUID()}`, returnId, line.productId, line.name, line.quantityMilli, line.unitPricePaisa, line.refundPaisa, line.costPaisa)
+        this.connection.prepare('UPDATE stock_levels SET quantity_milli=quantity_milli+?,updated_at=? WHERE branch_id=? AND product_id=?').run(line.quantityMilli, occurredAt, request.branchId, line.productId)
+        const stock = this.connection.prepare('SELECT quantity_milli FROM stock_levels WHERE branch_id=? AND product_id=?').get(request.branchId, line.productId) as SqlRow
+        this.connection.prepare('INSERT INTO stock_movements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(movementId, request.branchId, line.productId, 'sale_return', line.quantityMilli, Number(stock.quantity_milli), 'manual_return', returnId, returnNumber, occurredAt)
+        changeStockValue(this.connection, request.branchId, line.productId, line.costPaisa, true, occurredAt, movementId)
+      }
+
+      if (request.refundMethod === 'Cash') {
+        this.connection.prepare('INSERT INTO cash_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`cash-${randomUUID()}`, String(shift!.id), request.branchId, date, 'sale_refund', 'out', totalPaisa, 'Cash', returnId, occurredAt)
+      }
+      if (request.refundMethod === 'Udhaar') {
+        this.connection.prepare('INSERT INTO customer_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(`customer-ledger-${randomUUID()}`, request.branchId, request.customerId, 'sale_return', 0, totalPaisa, returnId, occurredAt)
+      }
+
+      this.connection.prepare('INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Manual Return', 'manual_return', returnId, 'Manual return completed', returnNumber, occurredAt)
+      return { returnId, returnNumber, refundMethod: request.refundMethod, totalPaisa, occurredAt }
+    })
+  }
+
+  getReturnsList(query: ReturnsListQuery): ReturnsSnapshot {
+    if (!query || typeof query.branchId !== 'string') throw new Error('Invalid returns query.')
+    const branch = this.connection.prepare('SELECT id FROM branches WHERE id=? AND is_active=1').get(query.branchId)
+    if (!branch) throw new Error('The selected branch is unavailable.')
+    const range = this.resolveSalesPeriod(query.period, query.dateFrom, query.dateTo)
+    const search = query.search?.trim().toLowerCase() ?? ''
+
+    const billReturns = (this.connection.prepare(`
+      SELECT r.id, r.return_number, s.id AS sale_id, s.invoice_number, c.name AS customer_name, u.name AS cashier_name, r.refund_method, r.reason, r.total_paisa, r.occurred_at
+      FROM sale_returns r
+      JOIN sales s ON s.id=r.sale_id
+      JOIN customers c ON c.id=s.customer_id
+      JOIN users u ON u.id=r.created_by
+      WHERE r.branch_id=? AND date(r.occurred_at,'+5 hours') BETWEEN ? AND ?
+      ORDER BY r.occurred_at DESC
+    `).all(query.branchId, range.start, range.end) as SqlRow[]).map((row): ReturnHistoryRow => {
+      const items = (this.connection.prepare(`
+        SELECT p.name AS product_name, sri.quantity_milli, sri.refund_paisa
+        FROM sale_return_items sri
+        JOIN products p ON p.id=sri.product_id
+        WHERE sri.return_id=?
+      `).all(String(row.id)) as SqlRow[]).map(i => ({
+        productName: String(i.product_name),
+        quantityMilli: Number(i.quantity_milli),
+        refundPaisa: Number(i.refund_paisa),
+      }))
+      return {
+        id: String(row.id),
+        returnNumber: String(row.return_number),
+        returnType: 'bill',
+        invoiceNumber: String(row.invoice_number),
+        saleId: String(row.sale_id),
+        customerName: String(row.customer_name),
+        cashierName: String(row.cashier_name),
+        refundMethod: String(row.refund_method),
+        reason: String(row.reason),
+        totalPaisa: Number(row.total_paisa),
+        occurredAt: String(row.occurred_at),
+        items,
+      }
+    })
+
+    const manualReturns = (this.connection.prepare(`
+      SELECT mr.id, mr.return_number, c.name AS customer_name, u.name AS cashier_name, mr.refund_method, mr.reason, mr.total_paisa, mr.occurred_at
+      FROM manual_returns mr
+      JOIN customers c ON c.id=mr.customer_id
+      JOIN users u ON u.id=mr.created_by
+      WHERE mr.branch_id=? AND mr.business_date BETWEEN ? AND ?
+      ORDER BY mr.occurred_at DESC
+    `).all(query.branchId, range.start, range.end) as SqlRow[]).map((row): ReturnHistoryRow => {
+      const items = (this.connection.prepare(`
+        SELECT product_name_snapshot, quantity_milli, refund_paisa
+        FROM manual_return_items
+        WHERE return_id=?
+      `).all(String(row.id)) as SqlRow[]).map(i => ({
+        productName: String(i.product_name_snapshot),
+        quantityMilli: Number(i.quantity_milli),
+        refundPaisa: Number(i.refund_paisa),
+      }))
+      return {
+        id: String(row.id),
+        returnNumber: String(row.return_number),
+        returnType: 'manual',
+        invoiceNumber: null,
+        saleId: null,
+        customerName: String(row.customer_name),
+        cashierName: String(row.cashier_name),
+        refundMethod: String(row.refund_method),
+        reason: String(row.reason),
+        totalPaisa: Number(row.total_paisa),
+        occurredAt: String(row.occurred_at),
+        items,
+      }
+    })
+
+    const combined = [...billReturns, ...manualReturns]
+      .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))
+      .filter(r => {
+        if (query.returnType !== 'all' && r.returnType !== query.returnType) return false
+        if (query.refundMethod !== 'all' && r.refundMethod !== query.refundMethod) return false
+        if (search) {
+          const itemText = r.items.map(i => i.productName).join(' ')
+          const haystack = `${r.returnNumber} ${r.invoiceNumber || ''} ${r.customerName} ${r.reason} ${itemText}`.toLowerCase()
+          if (!haystack.includes(search)) return false
+        }
+        return true
+      })
+
+    return {
+      businessDate: businessDate(this.now()),
+      rangeLabel: range.label,
+      totalReturnsCount: combined.length,
+      totalRefundedPaisa: combined.reduce((sum, r) => sum + r.totalPaisa, 0),
+      billReturnCount: combined.filter(r => r.returnType === 'bill').length,
+      manualReturnCount: combined.filter(r => r.returnType === 'manual').length,
+      returns: combined,
+    }
   }
 
   exportSalesCsv(query:SalesListQuery) {

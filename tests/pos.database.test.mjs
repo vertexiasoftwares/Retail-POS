@@ -52,7 +52,7 @@ test('completes a discounted cash sale atomically', () => {
   assert.equal(receipt.discountPaisa,3_000)
   assert.equal(receipt.totalPaisa,27_000)
   assert.equal(receipt.changePaisa,3_000)
-  assert.match(receipt.invoiceNumber,/^SAL-20261008-0001$/)
+  assert.match(receipt.invoiceNumber,/^BILL-001$/)
   assert.equal(database.getPosBootstrap('branch-main').products[0].quantityMilli,8_000)
   const drawer=database.connection.prepare("SELECT SUM(CASE WHEN direction='in' THEN amount_paisa ELSE -amount_paisa END) AS value FROM cash_transactions").get().value
   assert.equal(drawer,77_000)
@@ -84,4 +84,22 @@ test('rejects duplicate barcodes and updates Dashboard from completed POS sales'
   assert.equal(dashboard.profitPaisa,12_000)
   assert.equal(dashboard.customerDuePaisa,15_000)
   assert.equal(dashboard.recentSales.length,2)
+})
+
+test('inline POS customer name and phone create or reuse customer atomically on sale completion', () => {
+  const receipt=database.completePosSale({
+    branchId:'branch-main',
+    customerId:'customer-walk-in',
+    customerName:'Taha Ahmed',
+    customerPhone:'80100',
+    lines:[{productId:product.id,quantityMilli:1000,discountBasisPoints:0}],
+    paymentMethod:'Cash',
+    cashReceivedPaisa:15_000,
+  })
+  assert.equal(receipt.customerName,'Taha Ahmed')
+  assert.equal(receipt.customerPhone,'80100')
+  assert.match(receipt.invoiceNumber,/^BILL-003$/)
+  const detail=database.getSalesDetail('branch-main',receipt.saleId)
+  assert.equal(detail.customerName,'Taha Ahmed')
+  assert.equal(detail.customerPhone,'80100')
 })

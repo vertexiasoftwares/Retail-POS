@@ -143,29 +143,82 @@ export class RetailRepository {
     const isObj = typeof nameOrInput === 'object' && nameOrInput !== null
     const name = (isObj ? nameOrInput.name : nameOrInput)?.trim()
     if (!name) throw new Error('Supplier name is required.')
-    const existing = this.db.prepare('SELECT id FROM suppliers WHERE business_id=? AND name=? COLLATE NOCASE').get(this.businessId, name) as Row | undefined
-    if (existing) throw new Error('A supplier with this name already exists.')
-    const id = `sup-${randomUUID()}`
-    const time = this.now().toISOString()
-    const p = isObj ? (nameOrInput.phone?.trim() || null) : (phone?.trim() || null)
-
-    this.db.prepare('INSERT INTO suppliers(id, business_id, name, phone, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(id, this.businessId, name, p, time)
-
-    if (isObj) {
-      const contactPerson = nameOrInput.contactPerson?.trim() || null
-      const email = nameOrInput.email?.trim() || null
-      const ntnStrn = nameOrInput.ntnStrn?.trim() || null
-      const city = nameOrInput.city?.trim() || null
-      const address = nameOrInput.address?.trim() || null
-      const categories = nameOrInput.categories?.trim() || null
-      const paymentTerms = nameOrInput.paymentTerms?.trim() || null
-      const note = nameOrInput.note?.trim() || null
-      const openingBalancePaisa = nameOrInput.openingBalanceRupees ? Math.round(Number(nameOrInput.openingBalanceRupees) * 100) : 0
-
-      this.db.prepare('INSERT INTO supplier_profiles(supplier_id, contact_person, email, ntn_strn, city, address, categories, opening_balance_paisa, payment_terms, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, contactPerson, email, ntnStrn, city, address, categories, openingBalancePaisa, paymentTerms, note)
+    const requestedBranchId = isObj && typeof nameOrInput.branchId === 'string' ? nameOrInput.branchId.trim() : ''
+    let ledgerBranchId = requestedBranchId
+    if (ledgerBranchId) {
+      this.branch(ledgerBranchId)
+    } else {
+      const fallbackBranch = this.db.prepare('SELECT id FROM branches WHERE business_id=? ORDER BY is_active DESC, created_at ASC, rowid ASC LIMIT 1').get(this.businessId) as Row | undefined
+      if (!fallbackBranch) throw new Error('The selected branch is unavailable.')
+      ledgerBranchId = String(fallbackBranch.id)
     }
 
-    return { id, name }
+    const p = isObj ? (nameOrInput.phone?.trim() || null) : (phone?.trim() || null)
+    let openingBalancePaisa = 0
+    if (isObj && nameOrInput.openingBalancePaisa !== undefined && nameOrInput.openingBalancePaisa !== null) {
+      openingBalancePaisa = requireSafeInteger(nameOrInput.openingBalancePaisa, 'Opening balance')
+    } else if (isObj && nameOrInput.openingBalanceRupees !== undefined && nameOrInput.openingBalanceRupees !== null && nameOrInput.openingBalanceRupees !== '') {
+      const rawRupees = Number(nameOrInput.openingBalanceRupees)
+      if (!Number.isFinite(rawRupees) || rawRupees < 0) throw new Error('Opening balance must be zero or greater.')
+      openingBalancePaisa = requireSafeInteger(Math.round(rawRupees * 100), 'Opening balance')
+    }
+
+    const operationId = isObj && typeof nameOrInput.operationId === 'string' && nameOrInput.operationId.trim()
+      ? nameOrInput.operationId.trim()
+      : ''
+
+    const execute = (): { id: string; name: string } => {
+      const existing = this.db.prepare('SELECT id FROM suppliers WHERE business_id=? AND name=? COLLATE NOCASE').get(this.businessId, name) as Row | undefined
+      if (existing) throw new Error('A supplier with this name already exists.')
+      const id = `sup-${randomUUID()}`
+      const time = this.now().toISOString()
+
+      this.db.prepare('INSERT INTO suppliers(id, business_id, name, phone, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(id, this.businessId, name, p, time)
+
+      if (isObj) {
+        const contactPerson = nameOrInput.contactPerson?.trim() || null
+        const email = nameOrInput.email?.trim() || null
+        const ntnStrn = nameOrInput.ntnStrn?.trim() || null
+        const city = nameOrInput.city?.trim() || null
+        const address = nameOrInput.address?.trim() || null
+        const categories = nameOrInput.categories?.trim() || null
+        const paymentTerms = nameOrInput.paymentTerms?.trim() || null
+        const note = nameOrInput.note?.trim() || null
+
+        this.db.prepare('INSERT INTO supplier_profiles(supplier_id, contact_person, email, ntn_strn, city, address, categories, opening_balance_paisa, payment_terms, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, contactPerson, email, ntnStrn, city, address, categories, openingBalancePaisa, paymentTerms, note)
+      }
+
+      if (openingBalancePaisa > 0) {
+        this.db.prepare('INSERT INTO supplier_ledger VALUES (?,?,?,?,?,?,?,?)').run(newId('supplier-ledger'), ledgerBranchId, id, 'opening_balance', openingBalancePaisa, 0, id, time)
+        this.audit(ledgerBranchId, 'Supplier', id, 'Supplier created with opening balance', name, time)
+      } else {
+        this.audit(ledgerBranchId, 'Supplier', id, 'Supplier created', name, time)
+      }
+
+      return { id, name }
+    }
+
+    if (operationId) {
+      return postOperation(
+        this.db,
+        ledgerBranchId,
+        operationId,
+        'supplier.create',
+        { name, phone: p, openingBalancePaisa, ledgerBranchId },
+        this.now().toISOString(),
+        execute
+      )
+    }
+
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const created = execute()
+      this.db.exec('COMMIT')
+      return created
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   paySupplier(request: SupplierPayRequest): { paymentId: string; outstandingPaisa: number } {
@@ -224,7 +277,7 @@ export class RetailRepository {
         COALESCE((SELECT SUM(CASE WHEN entry_type='purchase' THEN debit_paisa ELSE 0 END) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0) AS total_purchases,
         COALESCE((SELECT SUM(credit_paisa) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0) AS total_paid,
         (SELECT MAX(business_date) FROM purchases p WHERE p.supplier_id=s.id AND p.branch_id=?) AS last_purchase,
-        (COALESCE(sp.opening_balance_paisa, 0) + COALESCE((SELECT SUM(debit_paisa-credit_paisa) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0)) AS outstanding
+        COALESCE((SELECT SUM(debit_paisa-credit_paisa) FROM supplier_ledger l WHERE l.supplier_id=s.id AND l.branch_id=?),0) AS outstanding
         FROM suppliers s
         LEFT JOIN supplier_profiles sp ON sp.supplier_id=s.id
         WHERE s.business_id=? ORDER BY s.name,s.id`).all(branchId, branchId, branchId, branchId, this.businessId) as Row[]).map(row => ({
@@ -247,7 +300,7 @@ export class RetailRepository {
         }))
       const payments = (this.db.prepare(`SELECT sp.* FROM supplier_payments sp JOIN suppliers s ON s.id=sp.supplier_id WHERE sp.branch_id=? AND s.business_id=? ORDER BY sp.created_at DESC,sp.rowid DESC`).all(branchId, this.businessId) as Row[]).map(row => ({ id: String(row.id), supplierId: String(row.supplier_id), businessDate: String(row.business_date), method: String(row.method) as RetailPaymentMethod, amountPaisa: Number(row.amount_paisa), reference: String(row.reference), createdAt: String(row.created_at) }))
       const supplierLedger = (this.db.prepare(`SELECT l.*,COALESCE(p.business_date,sp.business_date,date(l.occurred_at,'+5 hours')) AS business_date,
-        COALESCE(p.purchase_number,sp.reference,l.reference_id) AS display_reference,
+        CASE WHEN l.entry_type='opening_balance' THEN 'Opening Balance' ELSE COALESCE(p.purchase_number,sp.reference,l.reference_id) END AS display_reference,
         SUM(l.debit_paisa-l.credit_paisa) OVER (PARTITION BY l.supplier_id ORDER BY l.occurred_at,l.rowid ROWS UNBOUNDED PRECEDING) AS balance
         FROM supplier_ledger l JOIN suppliers s ON s.id=l.supplier_id LEFT JOIN purchases p ON p.id=l.reference_id LEFT JOIN supplier_payments sp ON sp.id=l.reference_id
         WHERE l.branch_id=? AND s.business_id=? ORDER BY l.occurred_at DESC,l.rowid DESC`).all(branchId, this.businessId) as Row[]).map(row => ({ id: String(row.id), supplierId: String(row.supplier_id), businessDate: String(row.business_date), type: String(row.entry_type), reference: String(row.display_reference), debitPaisa: Number(row.debit_paisa), creditPaisa: Number(row.credit_paisa), balanceAfterPaisa: Number(row.balance), occurredAt: String(row.occurred_at) }))

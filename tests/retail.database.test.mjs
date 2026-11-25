@@ -178,13 +178,96 @@ test('foreign-business branch and product references are denied', t => {
   assert.equal(db.connection.prepare('SELECT COUNT(*) AS n FROM purchases').get().n, 0)
 })
 
-test('document numbering survives gaps in existing rows', t => {
-  const { db, product } = setup(t, { openingStockMilli: 10000 })
+test('document numbering survives gaps in existing rows and never resets across days', t => {
+  let time = new Date('2026-10-10T12:00:00+05:00')
+  const db = new VertexiaDatabase(':memory:', () => time)
+  t.after(() => db.close())
+  const product = db.saveProduct(branchId, productInput({ openingStockMilli: 20000 }))
   db.openPosShift(branchId, 0)
   const request = { branchId, customerId: 'customer-walk-in', paymentMethod: 'Card', cashReceivedPaisa: 0, lines: [{ productId: product.id, quantityMilli: 1000, discountBasisPoints: 0 }] }
   const first = db.completePosSale({ ...request, operationId: randomUUID() })
+  assert.equal(first.invoiceNumber, 'BILL-001')
   db.connection.prepare('UPDATE sales SET invoice_number=? WHERE id=?').run('SAL-20261010-0042', first.saleId)
-  assert.equal(db.completePosSale({ ...request, operationId: randomUUID() }).invoiceNumber, 'SAL-20261010-0043')
+  const second = db.completePosSale({ ...request, operationId: randomUUID() })
+  assert.equal(second.invoiceNumber, 'BILL-043')
+  // Advance clock to next day: bill numbering must continue sequentially without resetting
+  time = new Date('2026-10-11T09:00:00+05:00')
+  const nextDayBill = db.completePosSale({ ...request, operationId: randomUUID() })
+  assert.equal(nextDayBill.invoiceNumber, 'BILL-044')
+})
+
+test('bill lookup, manual returns, and customer itemized purchase history work accurately', t => {
+  const { db, product } = setup(t, { openingStockMilli: 10000 })
+  db.openPosShift(branchId, 50000)
+  const cust = db.createPosCustomer({ name: 'Bilal Tariq', phone: '' })
+  const sale = db.completePosSale({
+    branchId,
+    operationId: randomUUID(),
+    customerId: cust.id,
+    paymentMethod: 'Cash',
+    cashReceivedPaisa: 30000,
+    lines: [{ productId: product.id, quantityMilli: 2000, discountBasisPoints: 0 }],
+  })
+  assert.equal(sale.invoiceNumber, 'BILL-001')
+
+  // Customer tab receives real purchase total, paid total, bill number, and itemized products
+  const custDetail = db.accounts.customerDetail(branchId, cust.id)
+  assert.equal(custDetail.customer.totalPurchasesPaisa, 30000)
+  assert.equal(custDetail.customer.totalPaidPaisa, 30000)
+  assert.equal(custDetail.sales[0].number, 'BILL-001')
+  assert.equal(custDetail.sales[0].items[0].productName, 'Retail Test Rice')
+  assert.equal(custDetail.sales[0].items[0].quantityMilli, 2000)
+  assert.equal(custDetail.sales[0].items[0].lineTotalPaisa, 30000)
+
+  // Find bill by short numeric input or full bill number
+  assert.equal(db.findSaleByInvoiceNumber(branchId, '001').invoiceNumber, 'BILL-001')
+  assert.equal(db.findSaleByInvoiceNumber(branchId, 'BILL-001').saleId ?? db.findSaleByInvoiceNumber(branchId, 'BILL-001').id, sale.saleId)
+
+  // Manual return restores stock and deducts drawer cash
+  const manual = db.createManualReturn({
+    branchId,
+    operationId: randomUUID(),
+    customerId: cust.id,
+    refundMethod: 'Cash',
+    reason: 'Manual counter return without receipt',
+    lines: [{ productId: product.id, quantityMilli: 1000, unitPricePaisa: 15000 }],
+  })
+  assert.equal(manual.returnNumber, 'MRET-001')
+  assert.equal(manual.totalPaisa, 15000)
+  assert.equal(db.retail.getSnapshot(branchId).products[0].stockMilli, 9000)
+  assert.equal(db.getDashboardSnapshot({ branchId, dateRange: 'today', chartPeriod: 'today' }).cashInDrawerPaisa, 65000)
+
+  const retList = db.getReturnsList({
+    branchId,
+    period: 'today',
+    search: '',
+    returnType: 'all',
+    refundMethod: 'all',
+  })
+  assert.equal(retList.manualReturnCount, 1)
+  assert.equal(retList.returns[0].returnNumber, 'MRET-001')
+
+  // Return reason is optional for both bill returns and manual returns
+  const billLine = db.getSalesDetail(branchId, sale.saleId).lines[0]
+  const optionalBillReturn = db.createSalesReturn({
+    branchId,
+    operationId: randomUUID(),
+    saleId: sale.saleId,
+    reason: '',
+    lines: [{ saleItemId: billLine.id, quantityMilli: 1000 }],
+  })
+  assert.equal(optionalBillReturn.totalPaisa, 15000)
+
+  const optionalManualReturn = db.createManualReturn({
+    branchId,
+    operationId: randomUUID(),
+    customerId: cust.id,
+    refundMethod: 'Cash',
+    reason: '',
+    lines: [{ productId: product.id, quantityMilli: 1000, unitPricePaisa: 15000 }],
+  })
+  assert.equal(optionalManualReturn.returnNumber, 'MRET-002')
+  assert.equal(optionalManualReturn.totalPaisa, 15000)
 })
 
 test('supplier overpayment and reused operation identifiers never double-pay', t => {
@@ -233,6 +316,33 @@ test('opening supplier balances affect outstanding without masquerading as purch
   const supplier = db.retail.getSnapshot(branchId).suppliers[0]
   assert.equal(supplier.totalPurchasesPaisa,0)
   assert.equal(supplier.outstandingPaisa,5000)
+
+  // Creating a supplier with opening balance posts opening_balance to supplier_ledger and allows payment
+  db.openPosShift(branchId, 50000)
+  const created = db.retail.createSupplier({ branchId, name: 'DEMO', openingBalanceRupees: 100 })
+  const createdSnap = db.retail.getSnapshot(branchId).suppliers.find(s => s.id === created.id)
+  assert.equal(createdSnap.outstandingPaisa, 10000)
+  assert.equal(createdSnap.totalPurchasesPaisa, 0)
+  const paid = db.retail.paySupplier({ branchId, operationId: randomUUID(), supplierId: created.id, amountPaisa: 10000, method: 'Cash', reference: 'Opening settled' })
+  assert.equal(paid.outstandingPaisa, 0)
+  assert.equal(db.retail.getSnapshot(branchId).suppliers.find(s => s.id === created.id).outstandingPaisa, 0)
+  assert.throws(() => db.retail.paySupplier({ branchId, operationId: randomUUID(), supplierId: created.id, amountPaisa: 1, method: 'Cash', reference: '' }), /exceed/)
+
+  // Migration v15 backfills existing pre-v15 suppliers that only had opening_balance_paisa in supplier_profiles
+  const dir = mkdtempSync(join(tmpdir(), 'vertexia-v15-sup-'))
+  const file = join(dir, 'store.db')
+  let legacyDb = new VertexiaDatabase(file, clock)
+  t.after(() => { legacyDb.close(); rmSync(dir, { recursive: true, force: true }) })
+  legacyDb.openPosShift(branchId, 50000)
+  legacyDb.connection.prepare('INSERT INTO suppliers(id,business_id,name,phone,is_active,created_at) VALUES (?,?,?,?,1,?)').run('legacy-demo', 'business-noor-mart', 'Legacy DEMO', null, clock().toISOString())
+  legacyDb.connection.prepare('INSERT INTO supplier_profiles(supplier_id,opening_balance_paisa) VALUES (?,?)').run('legacy-demo', 10000)
+  legacyDb.connection.exec('PRAGMA user_version = 14')
+  legacyDb.close()
+  legacyDb = new VertexiaDatabase(file, clock)
+  const migratedSnap = legacyDb.retail.getSnapshot(branchId).suppliers.find(s => s.id === 'legacy-demo')
+  assert.equal(migratedSnap.outstandingPaisa, 10000)
+  const settledLegacy = legacyDb.retail.paySupplier({ branchId, operationId: randomUUID(), supplierId: 'legacy-demo', amountPaisa: 10000, method: 'Cash', reference: 'v15 settled' })
+  assert.equal(settledLegacy.outstandingPaisa, 0)
 })
 
 test('version-four upgrade preserves real stock and financial records with a legacy marker', t => {

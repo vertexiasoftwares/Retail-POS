@@ -88,6 +88,7 @@ export function registerAuthRoutes(
         branches: session.branches,
         branchId: session.branchId,
         permissions: session.permissions,
+        allowedTabs: session.allowedTabs,
         mustChangePassword: session.mustChangePassword,
       },
     };

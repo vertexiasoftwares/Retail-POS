@@ -13,6 +13,8 @@ export function useSales() {
   const returnBusyRef = useRef(false)
   const [data,setData]=useState<SalesSnapshot>(empty)
   const [period,setPeriod]=useState<SalesPeriod>('today')
+  const [dateFrom,setDateFrom]=useState<string|undefined>(undefined)
+  const [dateTo,setDateTo]=useState<string|undefined>(undefined)
   const [search,setSearchState]=useState('')
   const [paymentMethod,setPaymentMethodState]=useState('all')
   const [status,setStatusState]=useState<SalesStatusFilter>('all')
@@ -23,19 +25,24 @@ export function useSales() {
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
   const [detail,setDetail]=useState<SalesDetail|null>(null)
-  const query:SalesListQuery={branchId:branchId,period,search,paymentMethod,status,page,pageSize}
+  const query:SalesListQuery={branchId:branchId,period,dateFrom,dateTo,search,paymentMethod,status,page,pageSize}
 
   const refresh=useCallback(async()=>{
     if(!window.vertexia){setError('Desktop database is unavailable. Start Vertexia with npm run dev:desktop.');setLoading(false);return}
-    try{const snapshot=await window.vertexia.sales.getSnapshot({branchId:branchId,period,search,paymentMethod,status,page,pageSize});setData(snapshot);setError('');if(snapshot.page!==page)setPage(snapshot.page)}catch(cause){setError(cause instanceof Error?cause.message:'Sales could not be loaded.')}finally{setLoading(false)}
-  },[branchId,period,search,paymentMethod,status,page,pageSize])
+    try{const snapshot=await window.vertexia.sales.getSnapshot({branchId:branchId,period,dateFrom,dateTo,search,paymentMethod,status,page,pageSize});setData(snapshot);setError('');if(snapshot.page!==page)setPage(snapshot.page)}catch(cause){setError(cause instanceof Error?cause.message:'Sales could not be loaded.')}finally{setLoading(false)}
+  },[branchId,period,dateFrom,dateTo,search,paymentMethod,status,page,pageSize])
 
   useEffect(()=>{const timer=window.setTimeout(()=>void refresh(),search?180:0);return()=>window.clearTimeout(timer)},[refresh,search])
   useEffect(()=>{if(!notice)return;const timer=window.setTimeout(()=>setNotice(''),3500);return()=>window.clearTimeout(timer)},[notice])
   const setSearch=(value:string)=>{setSearchState(value);setPage(1)}
   const setPaymentMethod=(value:string)=>{setPaymentMethodState(value);setPage(1)}
   const setStatus=(value:SalesStatusFilter)=>{setStatusState(value);setPage(1)}
-  const changePeriod=(value:SalesPeriod)=>{setPeriod(value);setPage(1)}
+  const changePeriod=(value:SalesPeriod, customStart?: string, customEnd?: string)=>{
+    setPeriod(value)
+    setDateFrom(customStart)
+    setDateTo(customEnd)
+    setPage(1)
+  }
   const setPageSize=(value:number)=>{setPageSizeState(value);setPage(1)}
   const openDetail=async(id:string)=>{if(!window.vertexia)return;setBusy(true);setError('');try{setDetail(await window.vertexia.sales.getDetail(branchId,id))}catch(cause){setError(cause instanceof Error?cause.message:'Invoice could not be loaded.')}finally{setBusy(false)}}
   const reloadDetail=async()=>{if(detail&&window.vertexia)setDetail(await window.vertexia.sales.getDetail(branchId,detail.id))}

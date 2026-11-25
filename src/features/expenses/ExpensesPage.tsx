@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useAuth } from '../../app/auth/useAuth'
-import { notifyRetailDataChanged } from '../../services/retail-events'
+import { notifyRetailDataChanged, triggerRefreshShimmer } from '../../services/retail-events'
 import { accountPaymentMethods, localBusinessDate, moneyPaisa as money, parseMoney } from '../../shared/account-format'
 import { useDesktopAction, useDesktopQuery } from '../../shared/hooks/useDesktopQuery'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { TopNavHeader } from '../../shared/layout/TopNavHeader'
-import { DateRangeFilter } from '../../shared/ui/DateRangeFilter'
+import { CustomSelect } from '../../shared/ui/CustomSelect'
+import { DateRangeFilter, type DateFilterPreset, type DateRange } from '../../shared/ui/DateRangeFilter'
 import { Icon } from '../../shared/ui/Icon'
 import { exportToExcel } from '../../shared/utils/exportUtils'
 import type { ExpenseRecord } from '../../types/accounts'
@@ -40,6 +41,7 @@ export default function ExpensesPage(props: PageProps) {
   const branchId = session!.branchId
   const today = localBusinessDate()
 
+  const [dateFilterPreset, setDateFilterPreset] = useState<DateFilterPreset>('month')
   const [dateFrom, setDateFrom] = useState(today.slice(0, 7) + '-01')
   const [dateTo, setDateTo] = useState(today)
   const [search, setSearch] = useState('')
@@ -88,31 +90,42 @@ export default function ExpensesPage(props: PageProps) {
     setSearch('')
     setCategoryFilter('')
     setMethodFilter('')
+    setDateFilterPreset('month')
     setDateFrom(today.slice(0, 7) + '-01')
     setDateTo(today)
     setPage(1)
   }
 
-  // Stats calculations
-  const totalExpensesPaisa = list.data?.postedPaisa ?? 18675000
-  const todayExpensesPaisa = useMemo(() => {
-    return (
-      list.data?.records
-        ?.filter(r => r.businessDate === today)
-        ?.reduce((acc, r) => acc + r.amountPaisa, 0) || 320000
-    )
-  }, [list.data?.records, today])
+  // Real totals from SQLite query (0 when no records exist)
+  const totalExpensesPaisa = list.data?.netPaisa ?? 0
+  const postedExpensesPaisa = list.data?.postedPaisa ?? 0
+  const todayExpensesPaisa = list.data?.todayPaisa ?? 0
+  const yearExpensesPaisa = list.data?.yearPaisa ?? 0
+
+  const positiveCategories = useMemo(
+    () => (list.data?.byCategory ?? []).filter(c => c.netPaisa > 0).sort((a, b) => b.netPaisa - a.netPaisa),
+    [list.data?.byCategory]
+  )
+  const positiveCategoryTotal = useMemo(
+    () => positiveCategories.reduce((sum, item) => sum + item.netPaisa, 0),
+    [positiveCategories]
+  )
 
   const highestCategory = useMemo(() => {
-    if (!list.data?.byCategory || list.data.byCategory.length === 0) {
-      return { category: 'Rent', netPaisa: 6000000, percent: 32 }
+    if (positiveCategories.length === 0 || positiveCategoryTotal <= 0) {
+      return { category: 'None', netPaisa: 0, percent: 0 }
     }
-    const sorted = [...list.data.byCategory].sort((a, b) => b.netPaisa - a.netPaisa)
-    const top = sorted[0]
-    const total = sorted.reduce((sum, item) => sum + item.netPaisa, 0)
-    const percent = total > 0 ? Math.round((top.netPaisa / total) * 100) : 0
-    return { ...top, percent }
-  }, [list.data?.byCategory])
+    const top = positiveCategories[0]
+    const percent = Math.round((top.netPaisa / positiveCategoryTotal) * 100)
+    return { category: top.category, netPaisa: top.netPaisa, percent }
+  }, [positiveCategories, positiveCategoryTotal])
+
+  const dateFilterValue: DateRange = {
+    preset: dateFilterPreset,
+    startDate: dateFrom,
+    endDate: dateTo,
+    label: dateFilterPreset === 'custom' ? `${dateFrom} - ${dateTo}` : dateFilterPreset,
+  }
 
   const error = action.error || list.error
 
@@ -129,13 +142,16 @@ export default function ExpensesPage(props: PageProps) {
             <button
               type="button"
               disabled={action.busy || list.loading}
-              onClick={notifyRetailDataChanged}
+              onClick={() => {
+                triggerRefreshShimmer()
+                notifyRetailDataChanged()
+              }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 6,
                 border: '1px solid #dce4ef',
                 background: '#f8fafc',
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: 600,
                 color: '#475569',
                 cursor: 'pointer',
@@ -160,7 +176,15 @@ export default function ExpensesPage(props: PageProps) {
             </div>
           </div>
           <div className="medkit-banner-actions">
-            <DateRangeFilter />
+            <DateRangeFilter
+              value={dateFilterValue}
+              onChange={range => {
+                setDateFilterPreset(range.preset)
+                setDateFrom(range.startDate)
+                setDateTo(range.endDate)
+                setPage(1)
+              }}
+            />
             {can('expenses.manage') && (
               <button
                 type="button"
@@ -199,11 +223,10 @@ export default function ExpensesPage(props: PageProps) {
               <Icon name="expense" size={22} />
             </div>
             <div className="medkit-stat-body">
-              <div className="medkit-stat-label">Total Expenses</div>
+              <div className="medkit-stat-label" style={{ fontSize: 14, color: '#475569' }}>Total Expenses</div>
               <div className="medkit-stat-value">{money(totalExpensesPaisa)}</div>
-              <div className="medkit-stat-meta">
-                <span className="medkit-trend-up">↑ 12%</span>
-                <span>This Month</span>
+              <div className="medkit-stat-meta" style={{ fontSize: 14, color: '#475569' }}>
+                <span>Posted: {money(postedExpensesPaisa)}</span>
               </div>
             </div>
           </div>
@@ -214,10 +237,9 @@ export default function ExpensesPage(props: PageProps) {
               <Icon name="cash" size={22} />
             </div>
             <div className="medkit-stat-body">
-              <div className="medkit-stat-label">Today&apos;s Expenses</div>
+              <div className="medkit-stat-label" style={{ fontSize: 14, color: '#475569' }}>Today&apos;s Expenses</div>
               <div className="medkit-stat-value">{money(todayExpensesPaisa)}</div>
-              <div className="medkit-stat-meta">
-                <span className="medkit-trend-up">↑ 8%</span>
+              <div className="medkit-stat-meta" style={{ fontSize: 14, color: '#475569' }}>
                 <span>{today}</span>
               </div>
             </div>
@@ -229,9 +251,9 @@ export default function ExpensesPage(props: PageProps) {
               <Icon name="report" size={22} />
             </div>
             <div className="medkit-stat-body">
-              <div className="medkit-stat-label">Highest Category</div>
+              <div className="medkit-stat-label" style={{ fontSize: 14, color: '#475569' }}>Highest Category</div>
               <div className="medkit-stat-value">{highestCategory.category}</div>
-              <div className="medkit-stat-meta">
+              <div className="medkit-stat-meta" style={{ fontSize: 14, color: '#475569' }}>
                 <span>{highestCategory.percent}% of total</span>
                 <span className="font-semibold text-slate-800">({money(highestCategory.netPaisa)})</span>
               </div>
@@ -244,11 +266,10 @@ export default function ExpensesPage(props: PageProps) {
               <Icon name="sale" size={22} />
             </div>
             <div className="medkit-stat-body">
-              <div className="medkit-stat-label">Total Expenses (Year)</div>
-              <div className="medkit-stat-value">Rs. 1,950,400</div>
-              <div className="medkit-stat-meta">
-                <span className="medkit-trend-down">↓ 5%</span>
-                <span>2026</span>
+              <div className="medkit-stat-label" style={{ fontSize: 14, color: '#475569' }}>Total Expenses (Year)</div>
+              <div className="medkit-stat-value">{money(yearExpensesPaisa)}</div>
+              <div className="medkit-stat-meta" style={{ fontSize: 14, color: '#475569' }}>
+                <span>Year {today.slice(0, 4)} YTD</span>
               </div>
             </div>
           </div>
@@ -294,21 +315,25 @@ export default function ExpensesPage(props: PageProps) {
             />
           </div>
 
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-600">
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-sm text-slate-700">
             <input
               type="date"
+              aria-label="Filter from date"
               value={dateFrom}
               onChange={e => {
+                setDateFilterPreset('custom')
                 setDateFrom(e.target.value)
                 setPage(1)
               }}
               className="outline-none bg-transparent"
             />
-            <span className="text-slate-400">→</span>
+            <span className="text-slate-500">→</span>
             <input
               type="date"
+              aria-label="Filter to date"
               value={dateTo}
               onChange={e => {
+                setDateFilterPreset('custom')
                 setDateTo(e.target.value)
                 setPage(1)
               }}
@@ -316,37 +341,33 @@ export default function ExpensesPage(props: PageProps) {
             />
           </div>
 
-          <select
-            className="medkit-select"
+          <CustomSelect
+            ariaLabel="Filter expenses by category"
             value={categoryFilter}
-            onChange={e => {
-              setCategoryFilter(e.target.value)
+            onChange={val => {
+              setCategoryFilter(val)
               setPage(1)
             }}
-          >
-            <option value="">All Categories</option>
-            {defaultCategories.map(c => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: '', label: 'All Categories' },
+              ...defaultCategories.map(c => ({ value: c, label: c })),
+            ]}
+            minWidth={155}
+          />
 
-          <select
-            className="medkit-select"
+          <CustomSelect
+            ariaLabel="Filter expenses by payment method"
             value={methodFilter}
-            onChange={e => {
-              setMethodFilter(e.target.value)
+            onChange={val => {
+              setMethodFilter(val)
               setPage(1)
             }}
-          >
-            <option value="">All Payment Methods</option>
-            {accountPaymentMethods.map(m => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: '', label: 'All Payment Methods' },
+              ...accountPaymentMethods.map(m => ({ value: m, label: m })),
+            ]}
+            minWidth={185}
+          />
 
           <button type="button" onClick={clearFilters} className="medkit-btn-clear">
             Clear
@@ -585,91 +606,75 @@ export default function ExpensesPage(props: PageProps) {
                 <h2>Expenses by Category</h2>
               </div>
               <div className="medkit-card-body">
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="relative w-28 h-28 flex-shrink-0">
-                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                      <path
-                        className="text-slate-100"
-                        strokeWidth="5"
-                        stroke="currentColor"
-                        fill="none"
-                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      />
-                      <path
-                        className="text-rose-500"
-                        strokeDasharray="32, 100"
-                        strokeWidth="5"
-                        strokeLinecap="round"
-                        stroke="currentColor"
-                        fill="none"
-                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      />
-                      <path
-                        className="text-amber-500"
-                        strokeDasharray="24, 100"
-                        strokeDashoffset="-32"
-                        strokeWidth="5"
-                        strokeLinecap="round"
-                        stroke="currentColor"
-                        fill="none"
-                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      />
-                      <path
-                        className="text-blue-500"
-                        strokeDasharray="12, 100"
-                        strokeDashoffset="-56"
-                        strokeWidth="5"
-                        strokeLinecap="round"
-                        stroke="currentColor"
-                        fill="none"
-                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      />
-                      <path
-                        className="text-purple-500"
-                        strokeDasharray="9, 100"
-                        strokeDashoffset="-68"
-                        strokeWidth="5"
-                        strokeLinecap="round"
-                        stroke="currentColor"
-                        fill="none"
-                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                      <span className="text-[10px] font-bold text-slate-900 font-heading">
-                        {money(totalExpensesPaisa)}
-                      </span>
-                      <span className="text-[8px] text-slate-400">This Month</span>
-                    </div>
+                {positiveCategories.length === 0 ? (
+                  <div className="py-6 text-center text-sm text-slate-700">
+                    No category expenses recorded in this period.
                   </div>
+                ) : (
+                  <div className="flex items-center gap-4 mb-2">
+                    <div className="relative w-28 h-28 flex-shrink-0">
+                      <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                        <circle
+                          className="text-slate-100"
+                          cx="18"
+                          cy="18"
+                          r="15.9155"
+                          strokeWidth="5"
+                          stroke="currentColor"
+                          fill="none"
+                        />
+                        {(() => {
+                          const palette = ['#f43f5e', '#f59e0b', '#3b82f6', '#8b5cf6', '#10b981', '#06b6d4']
+                          let offset = 0
+                          return positiveCategories.slice(0, 6).map((cat, idx) => {
+                            const pct = positiveCategoryTotal > 0 ? (cat.netPaisa / positiveCategoryTotal) * 100 : 0
+                            const dashOffset = -offset
+                            offset += pct
+                            return (
+                              <circle
+                                key={cat.category}
+                                cx="18"
+                                cy="18"
+                                r="15.9155"
+                                stroke={palette[idx % palette.length]}
+                                strokeWidth="5"
+                                strokeDasharray={`${pct} ${Math.max(0, 100 - pct)}`}
+                                strokeDashoffset={dashOffset}
+                                fill="none"
+                              />
+                            )
+                          })
+                        })()}
+                      </svg>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-1">
+                        <span className="text-sm font-bold text-slate-900 font-heading">
+                          {money(totalExpensesPaisa)}
+                        </span>
+                      </div>
+                    </div>
 
-                  <div className="flex-1 space-y-1 text-[11px]">
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-slate-600">
-                        <span className="w-2 h-2 rounded-full bg-rose-500" /> Rent
-                      </span>
-                      <span className="font-semibold text-slate-900">32%</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-slate-600">
-                        <span className="w-2 h-2 rounded-full bg-amber-500" /> Salaries
-                      </span>
-                      <span className="font-semibold text-slate-900">24%</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-slate-600">
-                        <span className="w-2 h-2 rounded-full bg-blue-500" /> Utilities
-                      </span>
-                      <span className="font-semibold text-slate-900">12%</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-slate-600">
-                        <span className="w-2 h-2 rounded-full bg-purple-500" /> Maintenance
-                      </span>
-                      <span className="font-semibold text-slate-900">9%</span>
+                    <div className="flex-1 space-y-1.5 text-sm">
+                      {positiveCategories.slice(0, 6).map((cat, idx) => {
+                        const palette = ['#f43f5e', '#f59e0b', '#3b82f6', '#8b5cf6', '#10b981', '#06b6d4']
+                        const pct = positiveCategoryTotal > 0 ? Math.round((cat.netPaisa / positiveCategoryTotal) * 100) : 0
+                        return (
+                          <div key={cat.category} className="flex items-center justify-between gap-2">
+                            <span className="flex items-center gap-2 text-slate-700 truncate">
+                              <span
+                                className="w-2.5 h-2.5 rounded-full shrink-0"
+                                style={{ backgroundColor: palette[idx % palette.length] }}
+                              />
+                              {cat.category}
+                            </span>
+                            <span className="font-semibold text-slate-900 shrink-0">
+                              {pct}%
+                            </span>
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
-                </div>
+                )}
               </div>
             </div>
 

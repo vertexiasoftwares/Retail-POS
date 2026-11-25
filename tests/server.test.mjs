@@ -151,4 +151,89 @@ test('Vertexia Central Server Foundation', async (t) => {
     await newServer.stop()
     assert.equal(existsSync(lockPath), false)
   })
+
+  await t.test('serves GET /api/system/support-info to any signed-in role including Cashier without exposing sensitive data', async () => {
+    server = await createServer({
+      port: 0,
+      host: '127.0.0.1',
+      databasePath: tempDbPath,
+      logger: false,
+    })
+
+    await server.start()
+    const port = server.app.server.address().port
+    const baseUrl = `http://127.0.0.1:${port}`
+
+    // Reject unauthenticated call
+    const unauth = await fetch(`${baseUrl}/api/system/support-info`)
+    assert.equal(unauth.status, 401)
+
+    // Setup owner & sign in
+    const setupRes = await fetch(`${baseUrl}/api/auth/setup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        businessName: 'Al-Madina Mart',
+        branchName: 'Main Branch',
+        city: 'Lahore',
+        ownerName: 'Owner',
+        username: 'owner1',
+        password: 'StrongPassword!123',
+      }),
+    })
+    assert.equal(setupRes.status, 200)
+    const setupData = await setupRes.json()
+    const branchId = setupData.session.branchId
+    const ownerCookie = setupRes.headers.get('set-cookie')?.split(';')[0] ?? ''
+    assert.ok(ownerCookie)
+
+    // Create Cashier account, login, clear temporary password, and fetch support-info as Cashier
+    const createCashier = await fetch(`${baseUrl}/api/auth/users`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({
+        name: 'Bilal Cashier',
+        username: 'bilal',
+        role: 'Cashier',
+        password: 'TempPassword!123',
+        branchIds: [branchId],
+      }),
+    })
+    assert.equal(createCashier.status, 200)
+
+    const cashierLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'bilal', password: 'TempPassword!123' }),
+    })
+    assert.equal(cashierLogin.status, 200)
+    let cashierCookie = cashierLogin.headers.get('set-cookie')?.split(';')[0] ?? ''
+    assert.ok(cashierCookie)
+
+    const pwChange = await fetch(`${baseUrl}/api/auth/change-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cashierCookie },
+      body: JSON.stringify({
+        currentPassword: 'TempPassword!123',
+        newPassword: 'CashierPass!456',
+      }),
+    })
+    assert.equal(pwChange.status, 200)
+    const refreshedCookie = pwChange.headers.get('set-cookie')?.split(';')[0]
+    if (refreshedCookie) cashierCookie = refreshedCookie
+
+    const supportRes = await fetch(`${baseUrl}/api/system/support-info`, {
+      headers: { cookie: cashierCookie },
+    })
+    assert.equal(supportRes.status, 200)
+    const info = await supportRes.json()
+    assert.equal(info.appVersion, '1.0.0')
+    assert.equal(info.shopName, 'Al-Madina Mart')
+    assert.ok(typeof info.os === 'string' && info.os.length > 0)
+    assert.ok(typeof info.databaseSizeBytes === 'number' && info.databaseSizeBytes > 0)
+    assert.ok(typeof info.licenseId === 'string' && info.licenseId.length > 0)
+    assert.ok(typeof info.deviceId === 'string' && info.deviceId.length > 0)
+    assert.equal('password' in info, false)
+    assert.equal('sales' in info, false)
+  })
 })

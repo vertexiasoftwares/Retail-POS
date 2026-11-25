@@ -150,35 +150,6 @@ export function OwnerDropdown({ onNavigate }: { onNavigate?: (page: string) => v
               type="button"
               onClick={() => {
                 setOpen(false)
-                onNavigate?.('My Account')
-              }}
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '9px 12px',
-                borderRadius: '8px',
-                border: 0,
-                background: 'transparent',
-                color: '#334155',
-                fontSize: '13px',
-                fontWeight: 500,
-                cursor: 'pointer',
-                textAlign: 'left',
-                transition: 'background 0.15s ease',
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#f1f5f9')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              <Icon name="user" size={17} />
-              <span>My Account</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false)
                 setShowPasswordModal(true)
               }}
               style={{

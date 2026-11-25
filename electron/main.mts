@@ -1,11 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, powerMonitor, safeStorage, screen, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
+import os from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
 import { LicenseClient } from './licensing/client.mjs'
 import { CloudLicenseClient, type CloudRegistration } from './licensing/cloudClient.mjs'
 import { LicenseAuthority } from './licensing/authority.mjs'
 import { createLicenseServer } from './licensing/server.mjs'
 import type { LicenseTrust } from '../src/types/licensing.js'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { DashboardChartPeriod, DashboardDateRange, DashboardQuery, PosCompleteSaleRequest, PosCreateCustomerInput, PosCreateProductInput, PosCartLineInput, ProductCatalogQuery, ProductSaveInput, SalesListQuery, SalesReturnRequest } from '../src/types/desktop-api.js'
@@ -209,7 +210,7 @@ function registerIpc() {
   handle('retail:adjust-stock', (_event, request: unknown) => database!.retail.adjustStock(request as StockAdjustmentRequest))
   handle('retail:receive-purchase', (_event, request: unknown) => database!.retail.receivePurchase(request as PurchaseReceiveRequest))
   handle('retail:pay-supplier', (_event, request: unknown) => database!.retail.paySupplier(request as SupplierPayRequest))
-  handle('retail:create-supplier', (_event, name: unknown, phone?: unknown) => database!.retail.createSupplier(name as string, phone as string | undefined))
+  handle('retail:create-supplier', (_event, input: unknown, phone?: unknown) => database!.retail.createSupplier(input as any, phone as string | undefined))
   handle('dashboard:get-snapshot', (_event, query: unknown) => {
     const result = database!.getDashboardSnapshot(validateDashboardQuery(query))
     result.branches = result.branches.filter(branch => auth!.current()!.branches.some(assigned => assigned.id === branch.id))
@@ -220,6 +221,42 @@ function registerIpc() {
     return database!.search(term.slice(0, 100), branchId)
   })
   handle('system:get-database-path', () => databasePath)
+  handle('system:get-support-info', async () => {
+    let dbBytes: number | null = null
+    try {
+      if (databasePath) {
+        const info = await stat(databasePath)
+        dbBytes = info.size
+      }
+    } catch {
+      dbBytes = null
+    }
+    let cloud = null
+    try {
+      cloud = cloudLicense?.inspect() ?? null
+    } catch {
+      cloud = null
+    }
+    const local = licensing?.status() ?? null
+    const session = auth?.current()
+    return {
+      appVersion: app.getVersion(),
+      os: `${os.type()} ${os.release()} (${process.platform} ${process.arch})`,
+      databaseSizeBytes: dbBytes,
+      licenseId: cloud?.license_id || local?.licenseId || 'Unregistered',
+      licenseStatus: cloud?.status || local?.state || 'Unknown',
+      licenseExpiryDate: cloud?.expires_at ?? local?.expiresAt ?? null,
+      deviceId: cloud?.deviceId || local?.deviceId || os.hostname(),
+      shopName: session?.businessName || local?.customerName || '',
+    }
+  })
+  handle('system:open-external', async (_event, url: unknown) => {
+    if (typeof url !== 'string' || !/^https:\/\/(wa\.me|api\.whatsapp\.com)\//i.test(url)) {
+      throw new Error('Only WhatsApp support links can be opened externally.')
+    }
+    await shell.openExternal(url)
+    return { opened: true }
+  })
   handle('pos:get-bootstrap', (_event, branchId: unknown) => {
     const data = database!.getPosBootstrap(requiredId(branchId))
     if (data.activeShiftId && auth!.current()!.role === 'Cashier') {
@@ -256,7 +293,15 @@ function registerIpc() {
     if (!auth!.current()!.permissions.includes('dashboard.read')) result.costPaisa = 0
     return result
   })
+  handle('sales:find-by-invoice', (_event, branchId:unknown, invoiceNumber:unknown) => {
+    if (typeof invoiceNumber !== 'string') throw new Error('Invalid invoice query.')
+    const result = database!.findSaleByInvoiceNumber(requiredId(branchId), invoiceNumber)
+    if (result && !auth!.current()!.permissions.includes('dashboard.read')) result.costPaisa = 0
+    return result
+  })
   handle('sales:create-return', (_event, request:unknown) => database!.createSalesReturn(request as SalesReturnRequest))
+  handle('sales:create-manual-return', (_event, request:unknown) => database!.createManualReturn(request as any))
+  handle('sales:list-returns', (_event, query:unknown) => database!.getReturnsList(query as any))
   handle('sales:export-csv', async (_event, query:unknown) => {
     const salesQuery=query as SalesListQuery
     const result=await dialog.showSaveDialog(mainWindow!,{title:'Export Sales',defaultPath:`vertexia-sales-${new Date().toISOString().slice(0,10)}.csv`,filters:[{name:'CSV file',extensions:['csv']}]})
@@ -539,20 +584,6 @@ async function createWindow() {
 app.whenReady().then(async () => {
   databasePath = join(app.getPath('userData'), 'data', 'vertexia.db')
   database = new VertexiaDatabase(databasePath)
-  try {
-    const currentOwner = database.connection.prepare("SELECT c.username, u.id FROM user_credentials c JOIN users u ON u.id=c.user_id WHERE u.role='Owner' LIMIT 1").get() as { username: string; id: string } | undefined
-    if (currentOwner && currentOwner.username.toLowerCase() === 'taha') {
-      const hash = 'scrypt-v1$72822db4c182c513abb35b390c18bd77$5ffcd948158299601d897a4b8ac71059ec4e50fc9af1166cf07b1aa09351e142d3d2df194b5c2ae7045c6b17b810d97c3c2d5aa5dde06dec8c5f5285f0715df4'
-      const nowIso = new Date().toISOString()
-      database.connection.prepare("UPDATE businesses SET name='Jameel' WHERE id='business-noor-mart'").run()
-      database.connection.prepare("UPDATE branches SET name='Main Branch', city='Karachi' WHERE business_id='business-noor-mart'").run()
-      database.connection.prepare("UPDATE users SET name='Jameel' WHERE id=?").run(currentOwner.id)
-      database.connection.prepare("UPDATE user_credentials SET username='jameel', password_hash=?, failed_attempts=0, locked_until=NULL, updated_at=? WHERE user_id=?").run(hash, nowIso, currentOwner.id)
-      database.connection.prepare("DELETE FROM login_throttle WHERE username='*' OR username='jameel' OR username='taha'").run()
-    }
-  } catch (migErr) {
-    console.warn('Owner credential auto-alignment note:', migErr)
-  }
   let trust: LicenseTrust | null = null
   if (smokeTarget) {
     const keys = generateKeyPairSync('ed25519')

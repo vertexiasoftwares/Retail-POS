@@ -44,8 +44,47 @@ export class AccountsRepository {
     balance(branchId, customerId) {
         return safe(this.db.prepare('SELECT COALESCE(SUM(debit_paisa-credit_paisa),0) AS n FROM customer_ledger WHERE branch_id=? AND customer_id=?').get(branchId, customerId).n);
     }
-    record(row) {
-        return { id: String(row.id), name: String(row.name), phone: String(row.phone ?? ''), isActive: Boolean(row.is_active), balancePaisa: safe(row.balance), creditSalesPaisa: safe(row.credit_sales), collectedPaisa: safe(row.collected), returnsPaisa: safe(row.returns) };
+    record(row, stats) {
+        const creditSalesPaisa = safe(row.credit_sales);
+        const collectedPaisa = safe(row.collected);
+        const returnsPaisa = safe(row.returns);
+        const totalPurchasesPaisa = stats ? stats.totalPurchasesPaisa : creditSalesPaisa;
+        const totalPaidPaisa = stats ? stats.totalPaidSalesPaisa + collectedPaisa : collectedPaisa;
+        return {
+            id: String(row.id),
+            name: String(row.name),
+            phone: String(row.phone ?? ''),
+            isActive: Boolean(row.is_active),
+            balancePaisa: safe(row.balance),
+            creditSalesPaisa,
+            collectedPaisa,
+            returnsPaisa,
+            totalPurchasesPaisa,
+            totalPaidPaisa,
+            lastPurchaseAt: stats?.lastPurchaseAt ?? null,
+            createdAt: row.created_at ? String(row.created_at) : undefined,
+        };
+    }
+    branchSalesStats(branchId) {
+        const rows = this.db.prepare(`
+      SELECT
+        s.customer_id,
+        COALESCE(SUM(CASE WHEN s.status!='voided' THEN s.total_paisa ELSE 0 END),0) AS total_purchases,
+        COALESCE(SUM(COALESCE(sp.paid_paisa,0)),0) AS paid_sales,
+        MAX(s.completed_at) AS last_purchase_at
+      FROM sales s
+      LEFT JOIN (
+        SELECT sale_id, SUM(CASE WHEN method!='Udhaar' THEN amount_paisa ELSE 0 END) AS paid_paisa
+        FROM sale_payments GROUP BY sale_id
+      ) sp ON sp.sale_id=s.id
+      WHERE s.branch_id=?
+      GROUP BY s.customer_id
+    `).all(branchId);
+        return new Map(rows.map(r => [String(r.customer_id), {
+                totalPurchasesPaisa: safe(r.total_purchases),
+                totalPaidSalesPaisa: safe(r.paid_sales),
+                lastPurchaseAt: r.last_purchase_at ? String(r.last_purchase_at) : null,
+            }]));
     }
     numbered(branchId, kind, date) {
         const prefix = { receipt: 'REC', expense: 'EXP', reversal: 'REV' }[kind], start = `${prefix}-${date.replaceAll('-', '')}-`;
@@ -144,19 +183,31 @@ export class AccountsRepository {
         const total = safe(this.db.prepare(`SELECT COUNT(*) AS n FROM (${customerFacts}) ${condition}`).get(...params).n);
         const rows = this.db.prepare(`SELECT * FROM (${customerFacts}) ${condition} ORDER BY name,id LIMIT ? OFFSET ?`).all(...params, pageSize, (page - 1) * pageSize);
         const summary = this.db.prepare(`SELECT COUNT(*) AS n,COALESCE(SUM(MAX(balance,0)),0) AS due,COALESCE(SUM(MAX(-balance,0)),0) AS credit FROM (${customerFacts})`).get(query.branchId, this.businessId);
-        return { customers: rows.map(row => this.record(row)), total, page, pageCount: Math.max(1, Math.ceil(total / pageSize)), customerCount: safe(summary.n), duePaisa: safe(summary.due), creditPaisa: safe(summary.credit), businessDate: retailBusinessDate(this.now()) };
+        const statsMap = this.branchSalesStats(query.branchId);
+        return { customers: rows.map(row => this.record(row, statsMap.get(String(row.id)))), total, page, pageCount: Math.max(1, Math.ceil(total / pageSize)), customerCount: safe(summary.n), duePaisa: safe(summary.due), creditPaisa: safe(summary.credit), businessDate: retailBusinessDate(this.now()) };
     }
     customerDetail(branchId, customerId, page = 1) {
         this.branch(branchId);
         this.customer(customerId);
         requireSafeInteger(page, 'Page', 1);
         const row = this.db.prepare(`SELECT * FROM (${customerFacts}) WHERE id=?`).get(branchId, this.businessId, customerId);
+        const stats = this.branchSalesStats(branchId).get(customerId);
         const total = safe(this.db.prepare('SELECT COUNT(*) AS n FROM customer_ledger WHERE branch_id=? AND customer_id=?').get(branchId, customerId).n);
         const ledger = this.db.prepare(`SELECT l.*,COALESCE(s.invoice_number,r.receipt_number,sr.return_number,l.reference_id) AS display_reference,SUM(l.debit_paisa-l.credit_paisa) OVER (ORDER BY l.occurred_at,l.rowid ROWS UNBOUNDED PRECEDING) AS balance
       FROM customer_ledger l LEFT JOIN sales s ON s.id=l.reference_id LEFT JOIN customer_receipts r ON r.id=l.reference_id LEFT JOIN sale_returns sr ON sr.id=l.reference_id WHERE l.branch_id=? AND l.customer_id=? ORDER BY l.occurred_at DESC,l.rowid DESC LIMIT 50 OFFSET ?`).all(branchId, customerId, (page - 1) * 50).map(entry => ({ id: String(entry.id), type: String(entry.entry_type), reference: String(entry.display_reference), debitPaisa: safe(entry.debit_paisa), creditPaisa: safe(entry.credit_paisa), balanceAfterPaisa: safe(entry.balance), occurredAt: String(entry.occurred_at) }));
         const receipts = this.db.prepare('SELECT id FROM customer_receipts WHERE branch_id=? AND customer_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100').all(branchId, customerId).map(row => this.receipt(branchId, String(row.id)));
-        const sales = this.db.prepare(`SELECT s.*,COALESCE((SELECT GROUP_CONCAT(method,', ') FROM sale_payments WHERE sale_id=s.id),'Unpaid') AS method FROM sales s WHERE branch_id=? AND customer_id=? ORDER BY completed_at DESC,rowid DESC LIMIT 100`).all(branchId, customerId).map(row => ({ id: String(row.id), number: String(row.invoice_number), totalPaisa: safe(row.total_paisa), paymentMethod: String(row.method), status: String(row.status), occurredAt: String(row.completed_at) }));
-        return { customer: this.record(row), ledger, ledgerTotal: total, page, pageCount: Math.max(1, Math.ceil(total / 50)), receipts, sales };
+        const sales = this.db.prepare(`SELECT s.*,COALESCE((SELECT GROUP_CONCAT(method,', ') FROM sale_payments WHERE sale_id=s.id),'Unpaid') AS method FROM sales s WHERE branch_id=? AND customer_id=? ORDER BY completed_at DESC,rowid DESC LIMIT 100`).all(branchId, customerId).map(sRow => {
+            const saleId = String(sRow.id);
+            const items = this.db.prepare('SELECT product_name_snapshot, quantity_milli, unit_price_paisa, discount_paisa, line_total_paisa FROM sale_items WHERE sale_id=? ORDER BY rowid').all(saleId).map(item => ({
+                productName: String(item.product_name_snapshot),
+                quantityMilli: safe(item.quantity_milli),
+                unitPricePaisa: safe(item.unit_price_paisa),
+                discountPaisa: safe(item.discount_paisa),
+                lineTotalPaisa: safe(item.line_total_paisa),
+            }));
+            return { id: saleId, number: String(sRow.invoice_number), totalPaisa: safe(sRow.total_paisa), paymentMethod: String(sRow.method), status: String(sRow.status), occurredAt: String(sRow.completed_at), items };
+        });
+        return { customer: this.record(row, stats), ledger, ledgerTotal: total, page, pageCount: Math.max(1, Math.ceil(total / 50)), receipts, sales };
     }
     postExpense(request) {
         if (!request || typeof request !== 'object')
@@ -210,11 +261,15 @@ export class AccountsRepository {
         const where = "WHERE branch_id=? AND business_date BETWEEN ? AND ? AND (instr(lower(description),lower(?))>0 OR instr(lower(number),lower(?))>0) AND (?='' OR category=?) AND (?='' OR method=?)";
         const params = [query.branchId, from, to, search, search, category, category, method, method];
         const summary = this.db.prepare(`SELECT COUNT(*) AS n,COALESCE(SUM(amount_paisa),0) AS net,COALESCE(SUM(MAX(amount_paisa,0)),0) AS posted,COALESCE(SUM(MAX(-amount_paisa,0)),0) AS reversed FROM ${expenseFacts} ${where}`).get(...params);
+        const todayDate = retailBusinessDate(this.now());
+        const yearStart = todayDate.slice(0, 4) + '-01-01';
+        const todayPaisa = safe(this.db.prepare(`SELECT COALESCE(SUM(amount_paisa),0) AS n FROM ${expenseFacts} WHERE branch_id=? AND business_date=?`).get(query.branchId, todayDate).n);
+        const yearPaisa = safe(this.db.prepare(`SELECT COALESCE(SUM(amount_paisa),0) AS n FROM ${expenseFacts} WHERE branch_id=? AND business_date BETWEEN ? AND ?`).get(query.branchId, yearStart, todayDate).n);
         const records = this.db.prepare(`SELECT * FROM ${expenseFacts} ${where} ORDER BY occurred_at DESC,id DESC LIMIT ? OFFSET ?`).all(...params, size, (page - 1) * size).map((row) => ({ id: String(row.id), expenseId: String(row.expense_id), number: String(row.number), businessDate: String(row.business_date), description: String(row.description), category: String(row.category), amountPaisa: safe(row.amount_paisa), method: String(row.method), reference: String(row.reference), createdBy: String(row.created_by), occurredAt: String(row.occurred_at), isReversal: Boolean(row.is_reversal), isReversed: Boolean(row.is_reversed), reversalReason: String(row.reversal_reason) }));
         const categories = this.db.prepare('SELECT DISTINCT category FROM expenses WHERE branch_id=? ORDER BY category').all(query.branchId).map(row => String(row.category));
         const byCategory = this.db.prepare(`SELECT category,SUM(amount_paisa) AS net FROM ${expenseFacts} ${where} GROUP BY category ORDER BY net DESC,category`).all(...params).map(row => ({ category: String(row.category), netPaisa: safe(row.net) }));
         const total = safe(summary.n);
-        return { records, total, page, pageCount: Math.max(1, Math.ceil(total / size)), netPaisa: safe(summary.net), postedPaisa: safe(summary.posted), reversedPaisa: safe(summary.reversed), categories, byCategory, businessDate: retailBusinessDate(this.now()) };
+        return { records, total, page, pageCount: Math.max(1, Math.ceil(total / size)), netPaisa: safe(summary.net), postedPaisa: safe(summary.posted), reversedPaisa: safe(summary.reversed), todayPaisa, yearPaisa, categories, byCategory, businessDate: todayDate };
     }
 }
 //# sourceMappingURL=accounts.mjs.map

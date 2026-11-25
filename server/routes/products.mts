@@ -103,7 +103,9 @@ export function registerProductsRoutes(
       });
       return result;
     } catch (err: any) {
-      return reply.status(400).send({ error: 'DeleteProductError', message: err?.message || 'Failed to delete product.', statusCode: 400 });
+      const msg = err?.message || 'Failed to delete product.';
+      const status = msg.includes('cannot be permanently deleted') ? 409 : 400;
+      return reply.status(status).send({ error: status === 409 ? 'ProductHasHistory' : 'DeleteProductError', message: msg, statusCode: status });
     }
   });
 

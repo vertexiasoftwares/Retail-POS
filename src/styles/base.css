@@ -1352,3 +1352,159 @@ select option {
   padding: 8px 12px !important;
 }
 
+.customer-select select,
+select.line-discount {
+  border: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
+/* Premium Text Shimmer Loading Screen */
+.shimmer-loading-screen {
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 35%, #f7f4ff 0%, #ffffff 55%, #f8fafc 100%);
+  padding: 24px;
+}
+
+.shimmer-loading-inline {
+  min-height: calc(100vh - 140px);
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+}
+
+.shimmer-loading-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 440px;
+  width: 100%;
+}
+
+.shimmer-logo-wrap {
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+  animation: vertexia-logo-float 2.6s ease-in-out infinite;
+}
+
+.shimmer-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 20px rgba(94, 12, 243, 0.2));
+}
+
+.shimmer-brand-text {
+  font-family: var(--font-heading, 'Plus Jakarta Sans', sans-serif);
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0 0 10px 0;
+  line-height: 1.15;
+  background: linear-gradient(
+    110deg,
+    #18122b 0%,
+    #18122b 32%,
+    #5e0cf3 45%,
+    #b794f4 50%,
+    #5e0cf3 55%,
+    #18122b 68%,
+    #18122b 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: vertexia-text-shimmer 2.1s linear infinite;
+}
+
+.shimmer-title-static {
+  font-family: var(--font-heading, 'Plus Jakarta Sans', sans-serif);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #18122b;
+  margin: 0 0 10px 0;
+}
+
+.shimmer-subtitle-text {
+  font-size: 14.5px;
+  font-weight: 600;
+  margin: 0 0 22px 0;
+  background: linear-gradient(
+    110deg,
+    #64748b 0%,
+    #64748b 35%,
+    #7c3aed 50%,
+    #64748b 65%,
+    #64748b 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: vertexia-text-shimmer 2.1s linear infinite;
+}
+
+.shimmer-error-text {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  padding: 10px 16px;
+  margin: 0 0 16px 0;
+}
+
+.shimmer-bar-track {
+  width: 190px;
+  height: 3.5px;
+  border-radius: 999px;
+  background: #ebe5f7;
+  overflow: hidden;
+  position: relative;
+}
+
+.shimmer-bar-beam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 48%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, #6d28d9, #a78bfa, #5e0cf3, transparent);
+  animation: vertexia-bar-sweep 1.5s ease-in-out infinite;
+}
+
+.shimmer-retry-btn {
+  width: auto !important;
+  padding: 10px 26px !important;
+}
+
+@keyframes vertexia-text-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -160% 0; }
+}
+
+@keyframes vertexia-bar-sweep {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(230%); }
+}
+
+@keyframes vertexia-logo-float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+

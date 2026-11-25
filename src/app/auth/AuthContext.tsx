@@ -6,6 +6,7 @@ import { AuthContext, type AuthValue } from './auth.context'
 import { LoginPage } from './LoginPage'
 import { RegisterPage } from './RegisterPage'
 import { LicenseActivation } from './LicenseActivation'
+import { ShimmerLoading } from '../../shared/ui/ShimmerLoading'
 
 type AuthView = 'login' | 'register' | 'activate'
 
@@ -170,17 +171,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (!status || !session || session.mustChangePassword) {
     if (!status) {
       return (
-        <main className="auth-screen">
-          <section className="auth-card">
-            <h1>Vertexia Retail POS</h1>
-            <p role={error ? 'alert' : 'status'}>{error || 'Loading your retail store records…'}</p>
-            {error && (
-              <button className="auth-btn-primary" onClick={() => void refresh()}>
-                Retry
-              </button>
-            )}
-          </section>
-        </main>
+        <ShimmerLoading
+          title="Vertexia Retail POS"
+          subtitle="Loading your retail store records…"
+          error={error}
+          onRetry={() => void refresh()}
+          fullScreen
+        />
       )
     }
 

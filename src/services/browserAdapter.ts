@@ -114,10 +114,34 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
     backup: {
       getStatus: async () => apiClient.get('/backup/status'),
       create: async () => apiClient.post('/backup/create'),
-      export: async () => ({ canceled: true }),
-      previewRestore: async () => ({ canceled: true }),
+      export: async (id: string) => {
+        const response = await fetch(`/api/backup/download/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+        if (!response.ok) {
+          let msg = 'Backup export failed.';
+          try {
+            const err = await response.json();
+            if (err?.message) msg = err.message;
+          } catch {}
+          throw new Error(msg);
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `vertexia-backup-${id}.sqlite`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        return { canceled: false, path: 'Downloads' };
+      },
+      previewRestore: async () => {
+        throw new Error('Take backups from the main PC. Database restore is only available on the main PC.');
+      },
       cancelRestore: async () => {},
-      restore: async () => ({ safetyBackupPath: '' }),
+      restore: async () => {
+        throw new Error('Take backups from the main PC. Database restore is only available on the main PC.');
+      },
     },
     auth: {
       status: async () => apiClient.get('/auth/status'),
@@ -198,7 +222,11 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       getSnapshot: async (query: any) => apiClient.post('/sales/snapshot', query),
       getDetail: async (branchId: string, saleId: string) =>
         apiClient.get(`/sales/detail?branchId=${encodeURIComponent(branchId)}&saleId=${encodeURIComponent(saleId)}`),
+      findByInvoice: async (branchId: string, invoiceNumber: string) =>
+        apiClient.get(`/sales/find-by-invoice?branchId=${encodeURIComponent(branchId)}&invoiceNumber=${encodeURIComponent(invoiceNumber)}`),
       createReturn: async (request: any) => apiClient.post('/sales/return', request),
+      createManualReturn: async (request: any) => apiClient.post('/sales/manual-return', request),
+      listReturns: async (query: any) => apiClient.post('/sales/returns', query),
       exportCsv: async (query: any) => {
         const res = await apiClient.post<{ canceled: boolean; csv: string; filename: string }>('/sales/export-csv', query);
         if (res.csv) {
@@ -212,6 +240,14 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       getDatabasePath: async () => {
         const res = await apiClient.get<{ path: string }>('/system/database-path');
         return res.path;
+      },
+      getSupportInfo: async () => apiClient.get('/system/support-info'),
+      openExternal: async (url: string) => {
+        if (typeof window !== 'undefined' && /^https:\/\/(wa\.me|api\.whatsapp\.com)\//i.test(url)) {
+          window.open(url, '_blank', 'noopener,noreferrer');
+          return { opened: true };
+        }
+        return { opened: false };
       },
     },
     zoom: {

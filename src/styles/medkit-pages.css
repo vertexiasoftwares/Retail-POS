@@ -4,10 +4,12 @@
   padding: 20px 24px;
   max-width: 1600px;
   width: 100%;
+  min-width: 0;
   margin: 0 auto;
   font-family: var(--font-body, 'DM Sans', sans-serif);
   color: #1e293b;
   box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 /* Top Banner Header */
@@ -23,6 +25,9 @@
   margin-bottom: 20px;
   flex-wrap: wrap;
   gap: 16px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .medkit-banner-left {
@@ -139,6 +144,9 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 24px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 @media (max-width: 1120px) {
@@ -162,6 +170,8 @@
   display: flex;
   align-items: flex-start;
   gap: 16px;
+  min-width: 0;
+  box-sizing: border-box;
   transition: transform 0.2s, box-shadow 0.2s;
 }
 
@@ -394,7 +404,16 @@ select option {
   border: 1px solid #e8eef5;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
   overflow: hidden;
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
+  box-sizing: border-box;
+}
+
+.medkit-card > * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .medkit-card-header {
@@ -616,11 +635,19 @@ select option {
 .medkit-modal {
   background: #ffffff;
   border-radius: 20px;
-  width: 100%;
-  max-width: 520px;
+  width: min(560px, calc(100vw - 32px));
+  max-width: 560px;
+  max-height: calc(100vh - 36px);
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.18);
   overflow: hidden;
   animation: medkitModalFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.medkit-modal.medkit-modal-lg {
+  max-width: 900px;
+  width: min(900px, calc(100vw - 40px));
 }
 
 @keyframes medkitModalFadeIn {
@@ -634,6 +661,7 @@ select option {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .medkit-modal-header h2 {
@@ -646,6 +674,10 @@ select option {
 
 .medkit-modal-body {
   padding: 24px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .medkit-modal-footer {
@@ -656,6 +688,7 @@ select option {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 /* Form Controls in Modal */
@@ -691,4 +724,180 @@ select option {
 .medkit-form-group textarea:focus {
   border-color: #5E0CF3;
   box-shadow: 0 0 0 3px rgba(94, 12, 243, 0.1);
+}
+
+/* ========================================================================= */
+/* Custom Popover Select Dropdown (replaces native OS blue dropdown menus)   */
+/* ========================================================================= */
+.vx-select-trigger {
+  width: 100%;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  border: 1px solid #dbe4ef !important;
+  background: #ffffff !important;
+  color: #1e293b !important;
+  font-weight: 500 !important;
+  outline: none !important;
+  cursor: pointer !important;
+  box-sizing: border-box !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03) !important;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease !important;
+  text-align: left !important;
+  white-space: nowrap !important;
+}
+
+.vx-select-trigger.vx-select-md {
+  height: 40px !important;
+  min-height: 40px !important;
+  padding: 0 12px 0 13px !important;
+  border-radius: 10px !important;
+  font-size: 13.5px !important;
+}
+
+.vx-select-trigger.vx-select-sm {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 9px 0 10px !important;
+  border-radius: 7px !important;
+  font-size: 12px !important;
+}
+
+.vx-select-trigger.vx-select-xs {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 7px 0 8px !important;
+  border-radius: 6px !important;
+  font-size: 11.5px !important;
+}
+
+.vx-select-trigger:hover:not(:disabled) {
+  border-color: #94a3b8 !important;
+  background-color: #f8fafc !important;
+}
+
+.vx-select-trigger.is-open:not(:disabled),
+.vx-select-trigger:focus-visible:not(:disabled) {
+  border-color: #5E0CF3 !important;
+  background-color: #ffffff !important;
+  box-shadow: 0 0 0 3px rgba(94, 12, 243, 0.12) !important;
+}
+
+.vx-select-trigger:disabled {
+  opacity: 0.58;
+  cursor: not-allowed !important;
+}
+
+.vx-select-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.vx-select-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.vx-select-trigger.is-open .vx-select-icon {
+  color: #5E0CF3;
+}
+
+.vx-select-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vx-select-chevron {
+  color: #64748b;
+  flex-shrink: 0;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+
+.vx-select-chevron.is-open {
+  transform: rotate(180deg);
+  color: #5E0CF3;
+}
+
+.vx-select-menu {
+  z-index: 100050;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.14), 0 2px 8px rgba(15, 23, 42, 0.06);
+  padding: 5px;
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: vxSelectPop 0.14s ease-out;
+}
+
+@keyframes vxSelectPop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.vx-select-option {
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #1e293b;
+  font-size: 13.5px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.vx-select-option:hover {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.vx-select-option.is-selected {
+  background: #f5f0ff;
+  color: #5E0CF3;
+  font-weight: 600;
+}
+
+.vx-select-option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.vx-select-option-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #fff1f2;
+  color: #e11d48;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.vx-select-check {
+  color: #5E0CF3;
+  flex-shrink: 0;
 }

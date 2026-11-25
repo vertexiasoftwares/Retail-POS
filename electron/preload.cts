@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron'
-import type { DashboardQuery, PosCompleteSaleRequest, PosCreateCustomerInput, PosCreateProductInput, PosCartLineInput, ProductCatalogQuery, ProductSaveInput, SalesListQuery, SalesReturnRequest, VertexiaDesktopApi } from '../src/types/desktop-api.js'
+import type { DashboardQuery, ManualReturnRequest, PosCompleteSaleRequest, PosCreateCustomerInput, PosCreateProductInput, PosCartLineInput, ProductCatalogQuery, ProductSaveInput, ReturnsListQuery, SalesListQuery, SalesReturnRequest, VertexiaDesktopApi } from '../src/types/desktop-api.js'
 
 const api: VertexiaDesktopApi = {
   licensing: {
@@ -107,11 +107,16 @@ const api: VertexiaDesktopApi = {
   sales: {
     getSnapshot: (query:SalesListQuery) => ipcRenderer.invoke('sales:get-snapshot',query),
     getDetail: (branchId:string,saleId:string) => ipcRenderer.invoke('sales:get-detail',branchId,saleId),
+    findByInvoice: (branchId:string,invoiceNumber:string) => ipcRenderer.invoke('sales:find-by-invoice',branchId,invoiceNumber),
     createReturn: (request:SalesReturnRequest) => ipcRenderer.invoke('sales:create-return',request),
+    createManualReturn: (request:ManualReturnRequest) => ipcRenderer.invoke('sales:create-manual-return',request),
+    listReturns: (query:ReturnsListQuery) => ipcRenderer.invoke('sales:list-returns',query),
     exportCsv: (query:SalesListQuery) => ipcRenderer.invoke('sales:export-csv',query),
   },
   system: {
     getDatabasePath: () => ipcRenderer.invoke('system:get-database-path'),
+    getSupportInfo: () => ipcRenderer.invoke('system:get-support-info'),
+    openExternal: (url: string) => ipcRenderer.invoke('system:open-external', url),
   },
   zoom: {
     setZoomFactor: (factor: number) => {

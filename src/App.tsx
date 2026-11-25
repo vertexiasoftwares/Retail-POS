@@ -7,6 +7,7 @@ import { AuthProvider } from './app/auth/AuthContext'
 import { useAuth } from './app/auth/useAuth'
 import { GlobalZoom } from './shared/layout/GlobalZoom'
 import { DesktopShell } from './shared/layout/DesktopShell'
+import { PageTransitionShimmer } from './shared/ui/TextShimmer'
 
 function AuthenticatedApp() {
   const { session, canPage } = useAuth()
@@ -14,11 +15,11 @@ function AuthenticatedApp() {
 
   const findFirstPermittedPage = (): PageName => {
     const allPageNames: PageName[] = [
-      'Dashboard', 'POS', 'Sales', 'Products', 'Inventory',
+      'Dashboard', 'POS', 'Sales', 'Sales History', 'Returns', 'Products', 'Inventory',
       'Purchases', 'Customers', 'Suppliers', 'Cash & Shifts',
-      'Expenses', 'Staff', 'Reports', 'Settings', 'My Account', 'Notifications'
+      'Expenses', 'Staff', 'Reports', 'Settings', 'Help Center', 'Notifications'
     ]
-    return allPageNames.find(p => canPage(p)) ?? 'My Account'
+    return allPageNames.find(p => canPage(p)) ?? 'Settings'
   }
 
   const navigate = (requestedPage: string) => {
@@ -35,7 +36,9 @@ function AuthenticatedApp() {
   const props = { onNavigate: navigate }
   return (
     <RetailDataProvider key={session!.userId + ':' + session!.branchId}>
-      <ActivePage {...props} />
+      <PageTransitionShimmer text="Loading...">
+        <ActivePage {...props} />
+      </PageTransitionShimmer>
     </RetailDataProvider>
   )
 }

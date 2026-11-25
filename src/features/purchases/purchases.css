@@ -178,24 +178,31 @@
 }
 .purchase-filters {
   display: grid;
-  grid-template-columns: minmax(220px, 1.5fr) repeat(2, minmax(122px, .66fr)) minmax(120px, .72fr) minmax(105px, .62fr) 58px;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(2, minmax(132px, .66fr)) minmax(135px, .78fr) minmax(120px, .65fr) 68px;
   gap: 10px;
   padding: 15px 14px;
+  align-items: center;
 }
 .purchase-filters label,
-.purchase-filters button {
-  height: 37px;
+.purchase-filters button.clear,
+.purchase-filters input[type="date"] {
+  height: 40px;
   border: 1px solid #d8e2ee;
-  border-radius: 6px;
-  color: #385677;
+  border-radius: 10px;
+  color: #1e293b;
   background: #fff;
-  font-size: 10px;
+  font-size: 13px;
+}
+.purchase-filters input[type="date"] {
+  padding: 0 10px;
+  width: 100%;
+  box-sizing: border-box;
 }
 .purchase-filters label {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 11px;
+  padding: 0 12px;
 }
 .purchase-filters label .icon {
   color: #58789d;
@@ -207,21 +214,16 @@
   outline: 0;
   color: #173759;
   background: transparent;
-}
-.purchase-filters button {
-  padding: 0 11px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  white-space: nowrap;
-}
-.purchase-filters button .icon {
-  color: #5E0CF3;
+  font-size: 13.5px;
 }
 .purchase-filters button.clear {
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
   justify-content: center;
   color: #5E0CF3;
+  font-weight: 600;
+  cursor: pointer;
 }
 .purchases-table-scroll {
   overflow-x: auto;
@@ -540,10 +542,10 @@
 .purchase-modal-backdrop { position:fixed; z-index:80; inset:0; display:grid; place-items:center; padding:24px; background:#14213a7a; backdrop-filter:blur(3px); }
 .purchase-modal { width:min(850px,100%); max-height:calc(100vh - 48px); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 70px #101d3a45; }
 .purchase-modal-heading { min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:15px; padding:14px 18px; border-bottom:1px solid #e3e9f1; }
-.purchase-modal-heading h2 { margin:0 0 5px; color:#173456; font-size:19px; }.purchase-modal-heading p { margin:0; color:#687d96; font-size:10px; }.purchase-modal-heading>button { width:34px; height:34px; border-radius:6px; color:#4f6481; background:#f3f6fa; font-size:21px; }
-.purchase-modal-body { padding:17px 18px; overflow-y:auto; }.purchase-document-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }.purchase-modal label { display:grid; gap:6px; color:#243f61; font-size:9px; font-weight:600; }.purchase-modal label em { color:#e63650; font-style:normal; }.purchase-modal input,.purchase-modal select { width:100%; height:38px; padding:0 10px; border:1px solid #d8e2ed; border-radius:5px; outline:0; color:#294867; background:#fff; font-size:10px; }
-.purchase-items-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:20px 0 9px; }.purchase-items-heading h3 { margin:0; color:#173456; font-size:12px; }.purchase-items-heading button { height:31px; display:flex; align-items:center; gap:6px; padding:0 11px; border:1px solid #d8e2ed; border-radius:5px; color:#5E0CF3; background:#fff; font-size:9px; }
-.purchase-line-list { display:grid; gap:8px; }.purchase-line { display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(90px,.55fr) minmax(110px,.7fr) 100px 30px; align-items:end; gap:9px; padding:10px; border:1px solid #e2e8f0; border-radius:6px; background:#fafcff; }.purchase-line>strong { height:38px; display:flex; align-items:center; justify-content:flex-end; color:#172f51; font-size:10px; }.purchase-line>button { width:30px; height:38px; border-radius:5px; color:#df324e; background:#ffecef; font-size:17px; }
-.purchase-payment-fields { display:grid; grid-template-columns:minmax(180px,1fr) repeat(2,minmax(130px,.7fr)); gap:12px; align-items:end; margin-top:18px; padding:13px; border-radius:6px; background:#f6f8fc; }.purchase-payment-fields>div { height:38px; display:flex; align-items:center; justify-content:space-between; padding:0 11px; border:1px solid #dce4ed; border-radius:5px; background:#fff; font-size:9px; }.purchase-payment-fields>div strong { color:#173456; font-size:11px; }.purchase-form-error { margin:12px 0 0; padding:9px 11px; border:1px solid #ffd0d7; border-radius:5px; color:#c92d47; background:#fff0f2; font-size:9px; }
-.purchase-modal-actions { min-height:65px; display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:12px 18px; border-top:1px solid #e3e9f1; }.purchase-modal-actions button { min-width:120px; height:38px; border:1px solid #d8e2ed; border-radius:6px; color:#34516f; background:#fff; font-size:10px; }.purchase-modal-actions button.primary { display:flex; align-items:center; justify-content:center; gap:7px; color:#fff; border-color:#5E0CF3; background:#5E0CF3; }
+.purchase-modal-heading h2 { margin:0 0 4px; color:#0f172a; font-size:20px; font-weight:700; }.purchase-modal-heading p { margin:0; color:#475569; font-size:13px; }.purchase-modal-heading>button { width:34px; height:34px; border-radius:8px; color:#475569; background:#f1f5f9; font-size:21px; }
+.purchase-modal-body { padding:20px; overflow-y:auto; }.purchase-document-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }.purchase-modal label { display:grid; gap:7px; color:#1e293b; font-size:13px; font-weight:600; }.purchase-modal label em { color:#e63650; font-style:normal; }.purchase-modal input,.purchase-modal select { width:100%; height:41px; padding:0 12px; border:1px solid #cbd5e1; border-radius:8px; outline:0; color:#0f172a; background:#fff; font-size:14px; }
+.purchase-items-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:20px 0 10px; }.purchase-items-heading h3 { margin:0; color:#0f172a; font-size:15px; font-weight:700; }.purchase-items-heading button { height:34px; display:flex; align-items:center; gap:6px; padding:0 13px; border:1px solid #cbd5e1; border-radius:8px; color:#5E0CF3; background:#fff; font-size:12.5px; font-weight:600; }
+.purchase-line-list { display:grid; gap:10px; }.purchase-line { display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(90px,.55fr) minmax(110px,.7fr) 110px 34px; align-items:end; gap:10px; padding:12px; border:1px solid #e2e8f0; border-radius:8px; background:#fafcff; }.purchase-line>strong { height:41px; display:flex; align-items:center; justify-content:flex-end; color:#0f172a; font-size:13.5px; }.purchase-line>button { width:34px; height:41px; border-radius:7px; color:#df324e; background:#ffecef; font-size:18px; }
+.purchase-payment-fields { display:grid; grid-template-columns:minmax(180px,1fr) repeat(2,minmax(130px,.7fr)); gap:14px; align-items:end; margin-top:18px; padding:14px; border-radius:8px; background:#f6f8fc; }.purchase-payment-fields>div { height:41px; display:flex; align-items:center; justify-content:space-between; padding:0 12px; border:1px solid #dce4ed; border-radius:8px; background:#fff; font-size:13px; }.purchase-payment-fields>div strong { color:#0f172a; font-size:14px; }.purchase-form-error { margin:12px 0 0; padding:11px 14px; border:1px solid #fecdd3; border-radius:8px; color:#be123c; background:#fff1f2; font-size:13.5px; font-weight:600; line-height:1.45; }
+.purchase-modal-actions { min-height:66px; display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:14px 20px; border-top:1px solid #e3e9f1; }.purchase-modal-actions button { min-width:124px; height:40px; border:1px solid #cbd5e1; border-radius:8px; color:#1e293b; background:#fff; font-size:13.5px; font-weight:600; }.purchase-modal-actions button.primary { display:flex; align-items:center; justify-content:center; gap:7px; color:#fff; border-color:#5E0CF3; background:#5E0CF3; }
 @media(max-width:700px){.purchase-modal-backdrop{padding:10px}.purchase-modal{max-height:calc(100vh - 20px)}.purchase-document-fields,.purchase-payment-fields{grid-template-columns:1fr}.purchase-line{grid-template-columns:1fr 1fr}.purchase-line label:first-child{grid-column:1/-1}.purchase-line>strong{justify-content:flex-start}.purchase-modal-actions button{min-width:0;flex:1}}

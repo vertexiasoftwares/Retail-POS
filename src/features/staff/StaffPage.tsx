@@ -3,7 +3,9 @@ import { useAuth } from '../../app/auth/useAuth'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { CustomSelect } from '../../shared/ui/CustomSelect'
 import { Icon } from '../../shared/ui/Icon'
+import { triggerRefreshShimmer } from '../../services/retail-events'
 import type { BranchRecord } from '../../types/branches'
 import type { StaffUser, UserRole } from '../../types/auth'
 
@@ -13,6 +15,8 @@ export const ALL_SIDEBAR_TABS = [
   'Dashboard',
   'POS',
   'Sales',
+  'Sales History',
+  'Returns',
   'Products',
   'Inventory',
   'Purchases',
@@ -29,6 +33,8 @@ const TAB_ICONS: Record<string, import('../../shared/ui/Icon').IconName> = {
   'Dashboard': 'home',
   'POS': 'store',
   'Sales': 'sale',
+  'Sales History': 'history',
+  'Returns': 'returnOrder',
   'Products': 'box',
   'Inventory': 'inventory',
   'Purchases': 'cart',
@@ -48,7 +54,7 @@ export function getDefaultTabsForRole(r: UserRole): string[] {
   if (r === 'Inventory') {
     return ['Dashboard', 'Products', 'Inventory', 'Purchases', 'Suppliers']
   }
-  return ['POS', 'Sales', 'Customers', 'Cash & Shifts']
+  return ['POS', 'Sales', 'Sales History', 'Customers', 'Cash & Shifts']
 }
 
 const AVATAR_COLORS = [
@@ -191,13 +197,16 @@ export default function StaffPage(props: PageProps) {
             <button
               type="button"
               disabled={busy}
-              onClick={() => void load()}
+              onClick={() => {
+                triggerRefreshShimmer()
+                void load()
+              }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 6,
                 border: '1px solid #dce4ef',
                 background: '#f8fafc',
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: 600,
                 color: '#475569',
                 cursor: 'pointer',
@@ -359,34 +368,34 @@ export default function StaffPage(props: PageProps) {
             />
           </div>
 
-          <select
-            className="medkit-select"
+          <CustomSelect
+            ariaLabel="Filter staff by role"
             value={roleFilter}
-            onChange={e => {
-              setRoleFilter(e.target.value)
+            onChange={val => {
+              setRoleFilter(val)
               setPage(1)
             }}
-          >
-            <option value="all">All Roles</option>
-            {roles.map(r => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: 'all', label: 'All Roles' },
+              ...roles.map(r => ({ value: r, label: r })),
+            ]}
+            minWidth={140}
+          />
 
-          <select
-            className="medkit-select"
+          <CustomSelect
+            ariaLabel="Filter staff by status"
             value={statusFilter}
-            onChange={e => {
-              setStatusFilter(e.target.value)
+            onChange={val => {
+              setStatusFilter(val)
               setPage(1)
             }}
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
+            options={[
+              { value: 'all', label: 'All Status' },
+              { value: 'active', label: 'Active' },
+              { value: 'inactive', label: 'Inactive' },
+            ]}
+            minWidth={135}
+          />
 
           <button
             type="button"

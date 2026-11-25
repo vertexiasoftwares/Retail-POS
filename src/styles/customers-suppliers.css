@@ -177,25 +177,28 @@
   background: #6D4AFF;
 }
 .customer-filters {
-  display: grid;
-  grid-template-columns: minmax(260px, 1.7fr) repeat(3, minmax(115px, .7fr)) 58px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
-  padding: 13px 11px;
+  padding: 13px 14px;
 }
 .customer-filters label,
-.customer-filters button {
-  height: 36px;
+.customer-filters button.clear {
+  height: 40px;
   border: 1px solid #d8e2ee;
-  border-radius: 6px;
+  border-radius: 10px;
   color: #395777;
   background: #fff;
-  font-size: 10px;
+  font-size: 13.5px;
 }
 .customer-filters label {
+  flex: 1 1 240px;
+  min-width: 200px;
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 11px;
+  padding: 0 12px;
 }
 .customer-filters input {
   width: 100%;
@@ -204,16 +207,16 @@
   outline: 0;
   color: #173759;
   background: transparent;
-}
-.customer-filters button {
-  padding: 0 11px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  font-size: 13.5px;
 }
 .customer-filters button.clear {
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
   color: #5E0CF3;
+  font-weight: 600;
+  cursor: pointer;
 }
 .customers-table-scroll {
   overflow-x: auto;
@@ -559,7 +562,23 @@
   background: linear-gradient(145deg, #5488ef, #4f6cdb);
 }
 .suppliers-table-card tbody tr { cursor:pointer; }.suppliers-table-card tbody tr.selected-supplier-row td { background:#f6f2ff; }.customer-profile-actions button:disabled { cursor:not-allowed; opacity:.48; }.supplier-ledger-type { color:#5E0CF3; font-weight:600; text-transform:capitalize; }
-.supplier-payment-backdrop { position:fixed; z-index:85; inset:0; display:grid; place-items:center; padding:20px; background:#14213a78; backdrop-filter:blur(3px); }.supplier-payment-modal { width:min(470px,100%); overflow:hidden; box-shadow:0 24px 70px #101d3a45; }.supplier-payment-heading { min-height:70px; display:flex; align-items:center; justify-content:space-between; gap:15px; padding:14px 17px; border-bottom:1px solid #e3e9f1; }.supplier-payment-heading h2 { margin:0 0 5px; color:#173456; font-size:18px; }.supplier-payment-heading p { margin:0; color:#687d96; font-size:10px; }.supplier-payment-heading>button { width:33px; height:33px; border-radius:6px; color:#506681; background:#f2f5f9; font-size:20px; }.supplier-payment-body { display:grid; gap:13px; padding:17px; }.supplier-payment-balance { min-height:62px; display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 14px; border-radius:6px; color:#60758e; background:#f5f1ff; font-size:10px; }.supplier-payment-balance strong { color:#5E0CF3; font-size:17px; }.supplier-payment-body label { display:grid; gap:6px; color:#294767; font-size:9px; font-weight:600; }.supplier-payment-body input,.supplier-payment-body select { width:100%; height:39px; padding:0 10px; border:1px solid #d8e2ed; border-radius:6px; outline:0; color:#294867; background:#fff; font-size:10px; }.supplier-payment-body>p { margin:0; padding:9px 10px; border:1px solid #ffd0d7; border-radius:5px; color:#c72e47; background:#fff0f2; font-size:9px; }.supplier-payment-actions { min-height:64px; display:flex; justify-content:flex-end; gap:10px; padding:12px 17px; border-top:1px solid #e3e9f1; }.supplier-payment-actions button { min-width:120px; height:38px; border:1px solid #d8e2ed; border-radius:6px; color:#34516f; background:#fff; font-size:10px; }.supplier-payment-actions button.primary { display:flex; align-items:center; justify-content:center; gap:7px; color:#fff; border-color:#5E0CF3; background:#5E0CF3; }
+.supplier-payment-backdrop { position:fixed; z-index:85; inset:0; display:grid; place-items:center; padding:20px; background:#14213a78; backdrop-filter:blur(3px); }
+.supplier-payment-modal { width:min(490px,100%); overflow:hidden; box-shadow:0 24px 70px #101d3a45; border-radius:14px; }
+.supplier-payment-heading { min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:15px; padding:16px 20px; border-bottom:1px solid #e3e9f1; }
+.supplier-payment-heading h2 { margin:0 0 4px; color:#0f172a; font-size:20px; font-weight:700; }
+.supplier-payment-heading p { margin:0; color:#475569; font-size:13px; }
+.supplier-payment-heading>button { width:34px; height:34px; border-radius:8px; color:#475569; background:#f1f5f9; font-size:21px; }
+.supplier-payment-body { display:grid; gap:15px; padding:20px; }
+.supplier-payment-balance { min-height:64px; display:flex; align-items:center; justify-content:space-between; gap:14px; padding:14px 16px; border-radius:10px; color:#475569; background:#f5f1ff; font-size:13.5px; font-weight:600; border:1px solid #e9d5ff; }
+.supplier-payment-balance strong { color:#5E0CF3; font-size:20px; font-weight:700; }
+.supplier-payment-body label { display:grid; gap:7px; color:#1e293b; font-size:13px; font-weight:600; }
+.supplier-payment-body input,.supplier-payment-body select,.supplier-payment-body textarea { width:100%; height:42px; padding:0 12px; border:1px solid #cbd5e1; border-radius:8px; outline:0; color:#0f172a; background:#fff; font-size:14px; font-weight:500; box-sizing:border-box; }
+.supplier-payment-body textarea { height:auto; min-height:76px; padding:10px 12px; }
+.supplier-payment-body input:focus,.supplier-payment-body select:focus,.supplier-payment-body textarea:focus { border-color:#5E0CF3; box-shadow:0 0 0 3px rgba(94, 12, 243, 0.12); }
+.supplier-payment-body>p { margin:0; padding:11px 14px; border:1px solid #fecdd3; border-radius:8px; color:#be123c; background:#fff1f2; font-size:13.5px; font-weight:600; line-height:1.45; }
+.supplier-payment-actions { min-height:68px; display:flex; justify-content:flex-end; gap:10px; padding:14px 20px; border-top:1px solid #e3e9f1; background:#f8fafc; }
+.supplier-payment-actions button { min-width:124px; height:40px; border:1px solid #cbd5e1; border-radius:8px; color:#1e293b; background:#fff; font-size:13.5px; font-weight:600; cursor:pointer; }
+.supplier-payment-actions button.primary { display:flex; align-items:center; justify-content:center; gap:7px; color:#fff; border-color:#5E0CF3; background:#5E0CF3; }
 @media(max-width:500px){.supplier-payment-backdrop{padding:10px}.supplier-payment-actions button{min-width:0;flex:1}.supplier-payment-balance{align-items:flex-start;flex-direction:column}}
 
 @media (max-width: 1280px) {

@@ -6,6 +6,8 @@ import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { TopNavHeader } from '../../shared/layout/TopNavHeader'
 import { DateRangeFilter } from '../../shared/ui/DateRangeFilter'
 import { Icon } from '../../shared/ui/Icon'
+import { triggerRefreshShimmer } from '../../services/retail-events'
+import { getPosSettings } from '../../shared/settings/posSettings'
 import type { CashSnapshot } from '../../types/recovery'
 
 const money = (value: number) =>
@@ -248,13 +250,16 @@ export default function CashShiftsPage(props: PageProps) {
             <button
               type="button"
               disabled={busy}
-              onClick={() => void run(refresh)}
+              onClick={() => {
+                triggerRefreshShimmer()
+                void run(refresh)
+              }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 6,
                 border: '1px solid #dce4ef',
                 background: '#f8fafc',
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: 600,
                 color: '#475569',
                 cursor: 'pointer',
@@ -286,7 +291,8 @@ export default function CashShiftsPage(props: PageProps) {
                 disabled={Boolean(staleShift && session?.role === 'Cashier')}
                 title={staleShift && session?.role === 'Cashier' ? 'Previous shift not closed. A manager must force-close it first.' : undefined}
                 onClick={() => {
-                  setOpening('')
+                  const defCash = getPosSettings().defaultOpeningCashRupees
+                  setOpening(defCash > 0 ? String(defCash) : '')
                   setSelectedCounterOption('Counter 1')
                   setCustomCounterName('')
                   setOpenNote('')
@@ -706,7 +712,8 @@ export default function CashShiftsPage(props: PageProps) {
                     disabled={Boolean(staleShift && session?.role === 'Cashier')}
                     title={staleShift && session?.role === 'Cashier' ? 'Previous shift not closed. A manager must force-close it first.' : undefined}
                     onClick={() => {
-                      setOpening('')
+                      const defCash = getPosSettings().defaultOpeningCashRupees
+                      setOpening(defCash > 0 ? String(defCash) : '')
                       setSelectedCounterOption('Counter 1')
                       setCustomCounterName('')
                       setOpenNote('')

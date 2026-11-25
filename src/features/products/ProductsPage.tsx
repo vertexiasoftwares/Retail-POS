@@ -9,7 +9,9 @@ import type { ProductDraft, ProductRecord } from './products.types'
 import { useProductsCatalog, type ProductsController } from './useProductsCatalog'
 
 import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { CustomSelect } from '../../shared/ui/CustomSelect'
 import { exportToExcel } from '../../shared/utils/exportUtils'
+import { getPosSettings } from '../../shared/settings/posSettings'
 
 const emptyDraft: ProductDraft = {
   name: '',
@@ -73,37 +75,39 @@ function ProductsToolbar({
             aria-label="Search product list"
           />
         </label>
-        <select
-          aria-label="Filter category"
+        <CustomSelect
+          ariaLabel="Filter category"
           value={controller.category}
-          onChange={event => controller.setCategory(event.target.value)}
-        >
-          <option value="all">All Categories</option>
-          {controller.categories.map(value => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter brand"
+          onChange={val => controller.setCategory(val)}
+          options={[
+            { value: 'all', label: 'All Categories' },
+            ...controller.categories.map(value => ({ value, label: value })),
+          ]}
+          minWidth={150}
+        />
+        <CustomSelect
+          ariaLabel="Filter brand"
           value={controller.brand}
-          onChange={event => controller.setBrand(event.target.value)}
-        >
-          <option value="all">All Brands</option>
-          {controller.brands.map(value => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter status"
+          onChange={val => controller.setBrand(val)}
+          options={[
+            { value: 'all', label: 'All Brands' },
+            ...controller.brands.map(value => ({ value, label: value })),
+          ]}
+          minWidth={135}
+        />
+        <CustomSelect
+          ariaLabel="Filter status"
           value={controller.status}
-          onChange={event => controller.setStatus(event.target.value as ProductsController['status'])}
-        >
-          <option value="all">All Status</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-          <option value="low_stock">Low Stock</option>
-          <option value="out_of_stock">Out of Stock</option>
-        </select>
+          onChange={val => controller.setStatus(val as ProductsController['status'])}
+          options={[
+            { value: 'all', label: 'All Status' },
+            { value: 'active', label: 'Active' },
+            { value: 'inactive', label: 'Inactive' },
+            { value: 'low_stock', label: 'Low Stock' },
+            { value: 'out_of_stock', label: 'Out of Stock' },
+          ]}
+          minWidth={140}
+        />
         <div className="product-view-toggle">
           <button
             className={view === 'list' ? 'active' : ''}
@@ -435,16 +439,10 @@ function ProductFormModal({
   onDelete?: (product: ProductRecord) => void
 }) {
   const [tab, setTab] = useState('Basic Info')
-  const [draft, setDraft] = useState<ProductDraft>(editing ? { ...editing } : { ...emptyDraft })
+  const [draft, setDraft] = useState<ProductDraft>(
+    editing ? { ...editing } : { ...emptyDraft, minimumStock: getPosSettings().defaultMinStock }
+  )
   const [message, setMessage] = useState('')
-
-  // Advanced POS settings state
-  const [taxRate, setTaxRate] = useState('0')
-  const [trackExpiry, setTrackExpiry] = useState(false)
-  const [allowDiscount, setAllowDiscount] = useState(true)
-  const [scaleProduct, setScaleProduct] = useState(false)
-  const [storageShelf, setStorageShelf] = useState('')
-  const [notes, setNotes] = useState('')
 
   useEscapeKey(onClose)
 
@@ -463,8 +461,8 @@ function ProductFormModal({
     if (onDelete) {
       onDelete(editing)
     } else {
-      void controller.remove(editing.id).then(success => {
-        if (success) onClose()
+      void controller.remove(editing.id).then(res => {
+        if (res.ok) onClose()
       })
     }
   }
@@ -518,8 +516,8 @@ function ProductFormModal({
         </div>
 
         <div className="product-form-tabs" style={{ padding: '0 24px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
-          {['Basic Info', 'Pricing', 'Inventory', 'Advanced'].map(item => (
-            <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>
+          {['Basic Info', 'Pricing', 'Inventory'].map(item => (
+            <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>
               {item}
             </button>
           ))}
@@ -845,117 +843,14 @@ function ProductFormModal({
               </label>
 
               {editing && (
-                <div style={{ gridColumn: 'span 2', padding: '12px 14px', background: '#eff6ff', borderRadius: 10, border: '1px solid #bfdbfe', color: '#1e40af', fontSize: 12.5 }}>
-                  ℹ️ To adjust or recount physical stock, use the <strong>Inventory Adjustments</strong> module to maintain audit trails.
-                </div>
-              )}
-            </div>
-          )}
-
-          {tab === 'Advanced' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '14px 18px' }}>
-              <label style={{ display: 'grid', gap: 4, fontSize: 12.5, fontWeight: 600, color: '#334155' }}>
-                GST / Sales Tax Rate (%)
-                <select
-                  value={taxRate}
-                  onChange={e => setTaxRate(e.target.value)}
-                  style={{ height: 40, padding: '0 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13.5, background: '#fff' }}
-                >
-                  <option value="0">0% (Tax Exempt / Zero-Rated)</option>
-                  <option value="18">18% (Standard Retail Sales Tax)</option>
-                  <option value="5">5% (Concessional)</option>
-                </select>
-              </label>
-
-              <label style={{ display: 'grid', gap: 4, fontSize: 12.5, fontWeight: 600, color: '#334155' }}>
-                Shelf / Storage Location
-                <input
-                  value={storageShelf}
-                  onChange={e => setStorageShelf(e.target.value)}
-                  placeholder="e.g. Aisle 4, Rack B-2"
-                  style={{ height: 40, padding: '0 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13.5 }}
-                />
-              </label>
-
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 14px',
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-              }}>
-                <div>
-                  <strong style={{ fontSize: 13, color: '#1e293b', display: 'block' }}>Batch & Expiry Tracking</strong>
-                  <span style={{ fontSize: 11.5, color: '#64748b' }}>Prompt for batch & expiry on purchase & POS</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={trackExpiry}
-                  onChange={e => setTrackExpiry(e.target.checked)}
-                  style={{ width: 18, height: 18, accentColor: '#5E0CF3' }}
-                />
-              </div>
-
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 14px',
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-              }}>
-                <div>
-                  <strong style={{ fontSize: 13, color: '#1e293b', display: 'block' }}>Allow POS Cashier Discount</strong>
-                  <span style={{ fontSize: 11.5, color: '#64748b' }}>Permit cashier to apply item-level discounts</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={allowDiscount}
-                  onChange={e => setAllowDiscount(e.target.checked)}
-                  style={{ width: 18, height: 18, accentColor: '#5E0CF3' }}
-                />
-              </div>
-
-              <div style={{
-                gridColumn: 'span 2',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 14px',
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-              }}>
-                <div>
-                  <strong style={{ fontSize: 13, color: '#1e293b', display: 'block' }}>Electronic Weight Scale Item</strong>
-                  <span style={{ fontSize: 11.5, color: '#64748b' }}>Product is weighed on scale during checkout (meat, fruits, bulk)</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={scaleProduct}
-                  onChange={e => setScaleProduct(e.target.checked)}
-                  style={{ width: 18, height: 18, accentColor: '#5E0CF3' }}
-                />
-              </div>
-
-              <label style={{ gridColumn: 'span 2', display: 'grid', gap: 4, fontSize: 12.5, fontWeight: 600, color: '#334155' }}>
-                Internal Notes & Description
-                <textarea
-                  rows={2}
-                  value={notes}
-                  onChange={e => setNotes(e.target.value)}
-                  placeholder="Optional internal remarks, storage instructions, or vendor information..."
-                  style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, resize: 'vertical' }}
-                />
-              </label>
-
-              {editing && (
-                <div style={{ gridColumn: 'span 2', padding: '12px 16px', background: '#f1f5f9', borderRadius: 10, fontSize: 12, color: '#64748b' }}>
-                  <strong>System Metadata:</strong> ID: <code>{editing.id}</code> · Created: {new Date(editing.createdAt).toLocaleString('en-PK')} · Last Updated: {new Date(editing.updatedAt).toLocaleString('en-PK')}
-                </div>
+                <>
+                  <div style={{ gridColumn: 'span 2', padding: '12px 14px', background: '#eff6ff', borderRadius: 10, border: '1px solid #bfdbfe', color: '#1e40af', fontSize: 14 }}>
+                    To adjust or recount physical stock, use the <strong>Inventory Adjustments</strong> module to maintain audit trails.
+                  </div>
+                  <div style={{ gridColumn: 'span 2', padding: '12px 16px', background: '#f1f5f9', borderRadius: 10, fontSize: 14, color: '#334155' }}>
+                    <strong>System Metadata:</strong> ID: <code>{editing.id}</code> · Created: {new Date(editing.createdAt).toLocaleString('en-PK')} · Last Updated: {new Date(editing.updatedAt).toLocaleString('en-PK')}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -1075,14 +970,21 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
   const [view, setView] = useState<'list' | 'grid'>('list')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [barcodes, setBarcodes] = useState<ProductRecord[] | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; status: 'active' | 'inactive' } | null>(null)
+  const [deleteBlockReason, setDeleteBlockReason] = useState('')
   const [deleting, setDeleting] = useState(false)
   const importRef = useRef<HTMLInputElement>(null)
+
+  const openDeleteModal = (prod: { id: string; name: string; status: 'active' | 'inactive' }) => {
+    setDeleteBlockReason('')
+    setDeleteTarget(prod)
+  }
 
   useEscapeKey(() => {
     setPanelOpen(false)
     setBarcodes(null)
     setDeleteTarget(null)
+    setDeleteBlockReason('')
   }, panelOpen || Boolean(barcodes) || Boolean(deleteTarget))
 
   const openAdd = () => {
@@ -1219,7 +1121,7 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
               onSelection={setSelected}
               onEdit={openEdit}
               onPrintBarcode={printSingleBarcode}
-              onDelete={prod => setDeleteTarget({ id: prod.id, name: prod.name })}
+              onDelete={prod => openDeleteModal({ id: prod.id, name: prod.name, status: prod.status })}
             />
           ) : (
             <CatalogGrid
@@ -1237,7 +1139,7 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
           controller={controller}
           editing={editing}
           onClose={() => setPanelOpen(false)}
-          onDelete={prod => setDeleteTarget({ id: prod.id, name: prod.name })}
+          onDelete={prod => openDeleteModal({ id: prod.id, name: prod.name, status: prod.status })}
         />
       )}
 
@@ -1245,12 +1147,17 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
       {deleteTarget && (
         <div
           className="medkit-modal-backdrop"
-          onClick={() => !deleting && setDeleteTarget(null)}
+          onClick={() => {
+            if (!deleting) {
+              setDeleteTarget(null)
+              setDeleteBlockReason('')
+            }
+          }}
           style={{ zIndex: 1100 }}
         >
           <div
             className="medkit-modal"
-            style={{ maxWidth: 440, borderRadius: 20, overflow: 'hidden' }}
+            style={{ maxWidth: 480, borderRadius: 20, overflow: 'hidden' }}
             onClick={e => e.stopPropagation()}
           >
             <div className="p-7 text-center">
@@ -1260,7 +1167,7 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
                   height: 58,
                   borderRadius: 16,
                   background: '#fff1f2',
-                  color: '#e11d48',
+                  color: '#be123c',
                   border: '1px solid #fecdd3',
                   display: 'flex',
                   alignItems: 'center',
@@ -1278,20 +1185,44 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
                   marginBottom: 8,
                 }}
               >
-                Delete Product
+                {deleteBlockReason ? 'Cannot Permanently Delete' : 'Delete Product'}
               </h3>
-              <p
-                style={{
-                  fontSize: 14,
-                  color: '#64748b',
-                  lineHeight: 1.5,
-                  marginBottom: 24,
-                }}
-              >
-                Are you sure you want to permanently delete{' '}
-                <strong style={{ color: '#0f172a' }}>"{deleteTarget.name}"</strong>?
-                This item will be completely removed from your inventory catalog and database.
-              </p>
+              {deleteBlockReason ? (
+                <div
+                  role="alert"
+                  style={{
+                    fontSize: 14,
+                    color: '#7f1d1d',
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: 12,
+                    padding: '12px 14px',
+                    lineHeight: 1.5,
+                    marginBottom: 22,
+                    textAlign: 'left',
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px', fontWeight: 600 }}>{deleteBlockReason}</p>
+                  <p style={{ margin: 0, color: '#334155' }}>
+                    {deleteTarget.status === 'active'
+                      ? `You can deactivate "${deleteTarget.name}" instead so it is hidden from POS while keeping historical records intact.`
+                      : `"${deleteTarget.name}" is already deactivated to protect its historical records.`}
+                  </p>
+                </div>
+              ) : (
+                <p
+                  style={{
+                    fontSize: 14,
+                    color: '#475569',
+                    lineHeight: 1.5,
+                    marginBottom: 24,
+                  }}
+                >
+                  Are you sure you want to delete{' '}
+                  <strong style={{ color: '#0f172a' }}>"{deleteTarget.name}"</strong>?
+                  Only products with zero sales, purchase, return, transfer, or stock history can be permanently removed.
+                </p>
+              )}
               <div
                 style={{
                   display: 'flex',
@@ -1303,45 +1234,86 @@ function ProductsScreen({ controller }: { controller: ProductsController }) {
                 <button
                   type="button"
                   disabled={deleting}
-                  onClick={() => setDeleteTarget(null)}
+                  onClick={() => {
+                    setDeleteTarget(null)
+                    setDeleteBlockReason('')
+                  }}
                   className="medkit-btn-clear"
                   style={{
                     padding: '10px 22px',
                     borderRadius: 12,
                     fontWeight: 600,
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={deleting}
-                  onClick={async () => {
-                    setDeleting(true)
-                    const ok = await controller.remove(deleteTarget.id)
-                    setDeleting(false)
-                    if (ok) {
-                      setDeleteTarget(null)
-                      setPanelOpen(false)
-                    }
-                  }}
-                  style={{
-                    padding: '10px 22px',
-                    borderRadius: 12,
-                    background: '#e11d48',
-                    color: '#ffffff',
-                    fontWeight: 600,
                     fontSize: 14,
-                    border: 'none',
-                    cursor: deleting ? 'not-allowed' : 'pointer',
-                    boxShadow: '0 2px 8px rgba(225, 29, 72, 0.3)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
                   }}
                 >
-                  {deleting ? 'Deleting…' : 'Yes, Delete Product'}
+                  {deleteBlockReason && deleteTarget.status !== 'active' ? 'Close' : 'Cancel'}
                 </button>
+                {deleteBlockReason ? (
+                  deleteTarget.status === 'active' && (
+                    <button
+                      type="button"
+                      disabled={deleting}
+                      onClick={async () => {
+                        setDeleting(true)
+                        await controller.toggle(deleteTarget.id)
+                        setDeleting(false)
+                        setDeleteBlockReason('')
+                        setDeleteTarget(null)
+                        setPanelOpen(false)
+                      }}
+                      style={{
+                        padding: '10px 22px',
+                        borderRadius: 12,
+                        background: '#b45309',
+                        color: '#ffffff',
+                        fontWeight: 600,
+                        fontSize: 14,
+                        border: 'none',
+                        cursor: deleting ? 'not-allowed' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                      }}
+                    >
+                      <Icon name="warning" size={16} />
+                      <span>{deleting ? 'Deactivating…' : 'Deactivate Product Instead'}</span>
+                    </button>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    disabled={deleting}
+                    onClick={async () => {
+                      setDeleting(true)
+                      const res = await controller.remove(deleteTarget.id)
+                      setDeleting(false)
+                      if (res.ok) {
+                        setDeleteBlockReason('')
+                        setDeleteTarget(null)
+                        setPanelOpen(false)
+                      } else {
+                        setDeleteBlockReason(res.error || 'Product cannot be permanently deleted.')
+                      }
+                    }}
+                    style={{
+                      padding: '10px 22px',
+                      borderRadius: 12,
+                      background: '#e11d48',
+                      color: '#ffffff',
+                      fontWeight: 600,
+                      fontSize: 14,
+                      border: 'none',
+                      cursor: deleting ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 2px 8px rgba(225, 29, 72, 0.3)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <Icon name="warning" size={16} />
+                    <span>{deleting ? 'Deleting…' : 'Yes, Delete Product'}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

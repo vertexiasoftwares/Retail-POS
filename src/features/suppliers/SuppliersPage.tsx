@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
+import { CustomSelect } from '../../shared/ui/CustomSelect'
 import { Icon, type IconName } from '../../shared/ui/Icon'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { useRetailData } from '../../app/data/useRetailData'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
+import { parseMoney } from '../../shared/account-format'
 import { RetailDataStatus } from '../../shared/ui/RetailDataStatus'
 import { exportToExcel } from '../../shared/utils/exportUtils'
 import type { PurchaseRecord } from '../purchases/purchases.types'
@@ -84,17 +86,43 @@ function SuppliersTable({
 }) {
   const [tab, setTab] = useState('All Suppliers')
   const [search, setSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [cityFilter, setCityFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [actionMenuId, setActionMenuId] = useState<string | null>(null)
 
   useEscapeKey(() => setActionMenuId(null), Boolean(actionMenuId))
 
-  const filtered = suppliers.filter(
-    supplier =>
-      (tab === 'All Suppliers' || supplier.status === tab) &&
-      [supplier.name, supplier.phone, supplier.city].some(value =>
-        value.toLowerCase().includes(search.toLowerCase())
+  const categoryOptions = useMemo(() => {
+    const unique = Array.from(
+      new Set(
+        suppliers
+          .flatMap(s => (s.categories || '').split(',').map(part => part.trim()))
+          .filter(Boolean)
       )
-  )
+    ).sort()
+    return [{ value: 'all', label: 'All Categories' }, ...unique.map(c => ({ value: c, label: c }))]
+  }, [suppliers])
+
+  const cityOptions = useMemo(() => {
+    const unique = Array.from(new Set(suppliers.map(s => (s.city || '').trim()).filter(Boolean))).sort()
+    return [{ value: 'all', label: 'All Cities' }, ...unique.map(c => ({ value: c, label: c }))]
+  }, [suppliers])
+
+  const filtered = suppliers.filter(supplier => {
+    if (tab !== 'All Suppliers' && supplier.status !== tab) return false
+    if (statusFilter !== 'all' && supplier.status !== statusFilter) return false
+    if (cityFilter !== 'all' && (supplier.city || '').trim().toLowerCase() !== cityFilter.toLowerCase()) return false
+    if (
+      categoryFilter !== 'all' &&
+      !(supplier.categories || '').toLowerCase().includes(categoryFilter.toLowerCase())
+    ) {
+      return false
+    }
+    return [supplier.name, supplier.phone, supplier.city, supplier.categories].some(value =>
+      (value || '').toLowerCase().includes(search.toLowerCase())
+    )
+  })
 
   return (
     <section className="card customers-table-card suppliers-table-card">
@@ -115,12 +143,31 @@ function SuppliersTable({
             placeholder="Search suppliers by name, phone, city..."
           />
         </label>
-        {['All Categories', 'All Cities', 'All Status'].map(label => (
-          <button key={label}>
-            {label}
-            <Icon name="chevron" size={14} />
-          </button>
-        ))}
+        <CustomSelect
+          ariaLabel="Filter suppliers by category"
+          value={categoryFilter}
+          onChange={setCategoryFilter}
+          options={categoryOptions}
+          minWidth={145}
+        />
+        <CustomSelect
+          ariaLabel="Filter suppliers by city"
+          value={cityFilter}
+          onChange={setCityFilter}
+          options={cityOptions}
+          minWidth={135}
+        />
+        <CustomSelect
+          ariaLabel="Filter suppliers by status"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={[
+            { value: 'all', label: 'All Status' },
+            { value: 'Active', label: 'Active' },
+            { value: 'Inactive', label: 'Inactive' },
+          ]}
+          minWidth={130}
+        />
         <button
           type="button"
           onClick={() => exportToExcel({
@@ -142,13 +189,13 @@ function SuppliersTable({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
-            height: '38px',
+            height: '40px',
             padding: '0 13px',
             border: '1px solid #dce4ef',
-            borderRadius: '8px',
+            borderRadius: '10px',
             background: '#ffffff',
             color: '#1e293b',
-            fontSize: '12.5px',
+            fontSize: '13px',
             fontWeight: 600,
             cursor: 'pointer',
             boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
@@ -161,7 +208,16 @@ function SuppliersTable({
           </svg>
           <span>Export Excel</span>
         </button>
-        <button className="clear" onClick={() => setSearch('')}>
+        <button
+          type="button"
+          className="clear"
+          onClick={() => {
+            setSearch('')
+            setCategoryFilter('all')
+            setCityFilter('all')
+            setStatusFilter('all')
+          }}
+        >
           Clear
         </button>
       </div>
@@ -521,15 +577,17 @@ function SupplierPaymentModal({ supplier, onClose }: { supplier: SupplierRecord;
           </label>
           <label>
             Payment Method
-            <select
+            <CustomSelect
               disabled={busy}
+              ariaLabel="Payment Method"
               value={method}
-              onChange={event => setMethod(event.target.value as SupplierPaymentMethod)}
-            >
-              {['Cash', 'Bank Transfer', 'JazzCash', 'Easypaisa', 'Card'].map(value => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
+              onChange={val => setMethod(val as SupplierPaymentMethod)}
+              options={['Cash', 'Bank Transfer', 'JazzCash', 'Easypaisa', 'Card'].map(value => ({
+                value,
+                label: value,
+              }))}
+              fullWidth
+            />
           </label>
           <label>
             Reference
@@ -540,7 +598,7 @@ function SupplierPaymentModal({ supplier, onClose }: { supplier: SupplierRecord;
               placeholder="Optional payment reference"
             />
           </label>
-          {error && <p className="text-rose-600 text-xs font-medium">{error}</p>}
+          {error && <p className="text-rose-600 text-sm font-semibold">{error}</p>}
         </div>
         <div className="supplier-payment-actions">
           <button onClick={onClose} disabled={busy}>
@@ -557,6 +615,7 @@ function SupplierPaymentModal({ supplier, onClose }: { supplier: SupplierRecord;
 
 function AddSupplierModal({ onClose }: { onClose: () => void }) {
   const { createSupplier, busy } = useRetailData()
+  const createOperation = useOperationIdentity('supplier-create')
   const [name, setName] = useState('')
   const [contactPerson, setContactPerson] = useState('')
   const [phone, setPhone] = useState('')
@@ -582,7 +641,8 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
     setError('')
     setSubmitting(true)
     try {
-      const result = await createSupplier({
+      const openingBalancePaisa = openingBalance.trim() ? parseMoney(openingBalance) : 0
+      const payload = {
         name: name.trim(),
         contactPerson: contactPerson.trim() || undefined,
         phone: phone.trim() || undefined,
@@ -591,14 +651,19 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
         city: city.trim() || undefined,
         address: address.trim() || undefined,
         categories: categories.trim() || undefined,
-        openingBalanceRupees: openingBalance ? Number(openingBalance) : 0,
+        openingBalancePaisa,
         paymentTerms: paymentTerms.trim() || undefined,
         note: note.trim() || undefined,
+      }
+      const result = await createSupplier({
+        ...payload,
+        operationId: createOperation.idFor(payload),
       } as any)
       if (!result.ok) {
         setError(result.error || 'Failed to create supplier')
         return
       }
+      createOperation.reset()
       onClose()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Failed to create supplier')
@@ -628,8 +693,8 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
         </div>
         <form onSubmit={handleSubmit}>
           <div className="supplier-payment-body" style={{ maxHeight: 'calc(80vh - 120px)', overflowY: 'auto', paddingRight: 4 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px 16px' }}>
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155', gridColumn: 'span 2' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '14px 16px' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b', gridColumn: 'span 2' }}>
                 Company / Supplier Name *
                 <input
                   required
@@ -639,16 +704,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setName(e.target.value)}
                   placeholder="e.g. Al-Madina Wholesale Distributors"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 Contact Person Name
                 <input
                   disabled={busy || submitting}
@@ -656,16 +721,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setContactPerson(e.target.value)}
                   placeholder="e.g. Muhammad Aslam"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 Phone Number
                 <input
                   disabled={busy || submitting}
@@ -673,16 +738,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setPhone(e.target.value)}
                   placeholder="e.g. 0300-1234567"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 Email Address
                 <input
                   type="email"
@@ -691,16 +756,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setEmail(e.target.value)}
                   placeholder="e.g. supplier@domain.com"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 NTN / STRN (Tax ID)
                 <input
                   disabled={busy || submitting}
@@ -708,16 +773,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setNtnStrn(e.target.value)}
                   placeholder="e.g. 1234567-8"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 City
                 <input
                   disabled={busy || submitting}
@@ -725,16 +790,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setCity(e.target.value)}
                   placeholder="e.g. Karachi"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 Category / Product Line
                 <input
                   disabled={busy || submitting}
@@ -742,16 +807,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setCategories(e.target.value)}
                   placeholder="e.g. Grocery, Beverages"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155', gridColumn: 'span 2' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b', gridColumn: 'span 2' }}>
                 Street Address
                 <input
                   disabled={busy || submitting}
@@ -759,16 +824,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setAddress(e.target.value)}
                   placeholder="e.g. Shop # 14, Wholesale Market, Jodia Bazar"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 Opening Payable Balance (Rs)
                 <input
                   type="number"
@@ -779,39 +844,34 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setOpeningBalance(e.target.value)}
                   placeholder="0.00"
                   style={{
-                    height: 38,
+                    height: 41,
                     padding: '0 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                   }}
                 />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
                 Payment Terms
-                <select
+                <CustomSelect
                   disabled={busy || submitting}
+                  ariaLabel="Payment Terms"
                   value={paymentTerms}
-                  onChange={e => setPaymentTerms(e.target.value)}
-                  style={{
-                    height: 38,
-                    padding: '0 12px',
-                    borderRadius: 8,
-                    border: '1px solid #cbd5e1',
-                    fontSize: 13,
-                    background: '#fff',
-                  }}
-                >
-                  <option value="Cash on Delivery">Cash on Delivery (COD)</option>
-                  <option value="Net 7">Net 7 Days</option>
-                  <option value="Net 15">Net 15 Days</option>
-                  <option value="Net 30">Net 30 Days</option>
-                  <option value="Advance">Advance Payment</option>
-                </select>
+                  onChange={setPaymentTerms}
+                  options={[
+                    { value: 'Cash on Delivery', label: 'Cash on Delivery (COD)' },
+                    { value: 'Net 7', label: 'Net 7 Days' },
+                    { value: 'Net 15', label: 'Net 15 Days' },
+                    { value: 'Net 30', label: 'Net 30 Days' },
+                    { value: 'Advance', label: 'Advance Payment' },
+                  ]}
+                  fullWidth
+                />
               </label>
 
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 600, color: '#334155', gridColumn: 'span 2' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600, color: '#1e293b', gridColumn: 'span 2' }}>
                 Notes / Terms
                 <textarea
                   rows={2}
@@ -820,16 +880,16 @@ function AddSupplierModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setNote(e.target.value)}
                   placeholder="Any delivery instructions, contact timings, or agreement details..."
                   style={{
-                    padding: '8px 12px',
+                    padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #cbd5e1',
-                    fontSize: 13,
+                    fontSize: 14,
                     resize: 'vertical',
                   }}
                 />
               </label>
             </div>
-            {error && <p className="text-rose-600 text-xs font-semibold mt-3">{error}</p>}
+            {error && <p className="text-rose-600 text-sm font-semibold mt-3">{error}</p>}
           </div>
           <div className="supplier-payment-actions">
             <button type="button" onClick={onClose} disabled={busy || submitting}>

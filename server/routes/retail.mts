@@ -120,17 +120,22 @@ export function registerRetailRoutes(
 
   // POST /api/retail/create-supplier
   app.post('/api/retail/create-supplier', async (request, reply) => {
-    const body = request.body as { name?: string; phone?: string } | undefined;
-    if (!body || !body.name || !body.name.trim()) {
+    const body = request.body as Record<string, any> | undefined;
+    if (!body || typeof body.branchId !== 'string' || !body.branchId.trim()) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    if (typeof body.name !== 'string' || !body.name.trim()) {
       return reply.status(400).send({ error: 'BadRequest', message: 'Supplier name is required.', statusCode: 400 });
     }
-    const guarded = enforceAuth(request, reply, auth, db);
+    const guarded = enforceAuth(request, reply, auth, db, 'suppliers.pay', body.branchId, true);
     if (!guarded) return;
 
     try {
-      const result = db.retail.createSupplier(body as any, body.phone);
+      const payload = ensureOperationId({ branchId: body.branchId, operationId: body.operationId, ...body }, guarded.session.userId);
+      const result = db.retail.createSupplier(payload, typeof body.phone === 'string' ? body.phone : undefined);
       sync?.broadcast({
         type: 'purchase:received', // triggers notifyRetailDataChanged to reload suppliers
+        branchId: body.branchId,
         businessId: guarded.session.businessId,
       });
       return result;

@@ -43,18 +43,23 @@ export function useProductsCatalog() {
   }
 
   const toggle=async(id:string) => { if(!window.vertexia)return;setBusy(true);try{const next=await window.vertexia.products.toggleStatus(branchId,id);notifyRetailDataChanged();setNotice(`Product ${next==='active'?'activated':'deactivated'}.`);await refresh()}catch(cause){setError(cause instanceof Error?cause.message:'Status could not be changed.')}finally{setBusy(false)} }
-  const remove=async(id:string) => {
-    if(!window.vertexia)return false
+  const remove = async (id: string): Promise<{ ok: boolean; blockedByHistory?: boolean; error?: string }> => {
+    if (!window.vertexia) return { ok: false, error: 'Desktop database is unavailable.' }
     setBusy(true)
     try {
-      const res=await window.vertexia.products.delete(branchId,id)
+      const res = await window.vertexia.products.delete(branchId, id)
       notifyRetailDataChanged()
-      setNotice(res.archived?'Product archived because it has financial history.':'Product deleted successfully.')
+      setNotice(res.archived ? 'Product deactivated so history remains preserved.' : 'Product deleted successfully.')
       await refresh()
-      return true
-    } catch(cause) {
-      setError(cause instanceof Error?cause.message:'Product could not be deleted.')
-      return false
+      return { ok: true }
+    } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : 'Product could not be deleted.'
+      const blockedByHistory =
+        msg.includes('cannot be permanently deleted') ||
+        msg.includes('history') ||
+        msg.includes('Deactivate')
+      setError(msg)
+      return { ok: false, blockedByHistory, error: msg }
     } finally {
       setBusy(false)
     }

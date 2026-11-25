@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Sidebar } from './Sidebar'
 import { AppFooter } from './AppFooter'
 
@@ -24,6 +24,24 @@ export function PageShell({ activePage, className = '', header, children, onNavi
     }
   })
 
+  useEffect(() => {
+    const sync = () => {
+      try {
+        const saved = localStorage.getItem('vertexia_sidebar_locked')
+        setIsSidebarLocked(saved !== 'false')
+      } catch {}
+    }
+    window.addEventListener('vertexia:sidebar-lock-changed', sync)
+    return () => window.removeEventListener('vertexia:sidebar-lock-changed', sync)
+  }, [])
+
+  const setAndPersistLock = (next: boolean) => {
+    setIsSidebarLocked(next)
+    try {
+      localStorage.setItem('vertexia_sidebar_locked', String(next))
+    } catch {}
+  }
+
   const toggleLock = () => {
     setIsSidebarLocked(curr => {
       const next = !curr
@@ -46,7 +64,7 @@ export function PageShell({ activePage, className = '', header, children, onNavi
         activePage={activePage}
         onNavigate={onNavigate}
         isLockedExternally={isSidebarLocked}
-        onLockChange={setIsSidebarLocked}
+        onLockChange={setAndPersistLock}
         isHoveredExternally={isSidebarHovered}
         onHoverChange={setIsSidebarHovered}
         locked={isSidebarLocked}

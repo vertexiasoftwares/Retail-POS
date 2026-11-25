@@ -1,5 +1,19 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
-import type { ReportColumn, ReportQuery, ReportSection, ReportSnapshot, ReportTable, StockValuation } from '../../src/types/reports.js'
+import type {
+  ReportCategoryPoint,
+  ReportColumn,
+  ReportExpenseCategory,
+  ReportQuery,
+  ReportRecentSale,
+  ReportSection,
+  ReportSnapshot,
+  ReportStaffSale,
+  ReportTable,
+  ReportTopProduct,
+  ReportTrendGranularity,
+  ReportTrendPoint,
+  StockValuation,
+} from '../../src/types/reports.js'
 import { expenseFacts } from './accounts.mjs'
 import { requireBusinessDate, requireSafeInteger } from './posting.mjs'
 import { proportionalCost } from './valuation.mjs'
@@ -9,10 +23,31 @@ const saleFacts = `(SELECT s.branch_id,s.business_date,s.invoice_number AS docum
   s.total_paisa AS amount,s.cost_paisa AS cost,'Sale' AS type,s.completed_at AS occurred_at
   FROM sales s JOIN customers c ON c.id=s.customer_id LEFT JOIN sale_payments p ON p.sale_id=s.id WHERE s.status!='voided'
   UNION ALL SELECT r.branch_id,date(r.occurred_at,'+5 hours'),r.return_number,c.name,r.refund_method,-r.total_paisa,-r.cost_paisa,'Return',r.occurred_at
-  FROM sale_returns r JOIN sales s ON s.id=r.sale_id JOIN customers c ON c.id=s.customer_id)`
+  FROM sale_returns r JOIN sales s ON s.id=r.sale_id JOIN customers c ON c.id=s.customer_id
+  UNION ALL SELECT mr.branch_id,mr.business_date,mr.return_number,c.name,mr.refund_method,-mr.total_paisa,-mr.cost_paisa,'Manual Return',mr.occurred_at
+  FROM manual_returns mr JOIN customers c ON c.id=mr.customer_id)`
+const itemFacts = `(SELECT s.branch_id,s.business_date,si.product_id,p.name AS product_name,p.category,p.unit,
+  si.quantity_milli AS qty_milli,si.line_total_paisa AS amount_paisa
+  FROM sale_items si JOIN sales s ON s.id=si.sale_id JOIN products p ON p.id=si.product_id WHERE s.status!='voided'
+  UNION ALL SELECT r.branch_id,date(r.occurred_at,'+5 hours') AS business_date,ri.product_id,p.name AS product_name,p.category,p.unit,
+  -ri.quantity_milli AS qty_milli,-ri.refund_paisa AS amount_paisa
+  FROM sale_return_items ri JOIN sale_returns r ON r.id=ri.return_id JOIN products p ON p.id=ri.product_id
+  UNION ALL SELECT mr.branch_id,mr.business_date,mri.product_id,p.name AS product_name,p.category,p.unit,
+  -mri.quantity_milli AS qty_milli,-mri.refund_paisa AS amount_paisa
+  FROM manual_return_items mri JOIN manual_returns mr ON mr.id=mri.return_id JOIN products p ON p.id=mri.product_id)`
 const sections = new Set<ReportSection>(['transfers','overview','sales','expenses','purchases','customers','suppliers','stock','shifts'])
+const granularities = new Set<ReportTrendGranularity>(['daily', 'weekly', 'monthly'])
 const column = (key: string, label: string, kind?: ReportColumn['kind']): ReportColumn => ({ key, label, kind })
 const money = (key: string, label: string) => column(key,label,'money')
+function trendLabel(periodKey: string, granularity: ReportTrendGranularity): string {
+  if (granularity === 'daily' && /^\d{4}-\d{2}-\d{2}$/.test(periodKey)) {
+    return new Date(`${periodKey}T12:00:00Z`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' })
+  }
+  if (granularity === 'monthly' && /^\d{4}-\d{2}$/.test(periodKey)) {
+    return new Date(`${periodKey}-01T12:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' })
+  }
+  return periodKey
+}
 
 export class ReportsRepository {
   constructor(private readonly db: DatabaseSync, private readonly businessId: string, private readonly now: () => Date) {}
@@ -93,22 +128,106 @@ export class ReportsRepository {
   }
   snapshot(query: ReportQuery, branchIds: string[] = [query.branchId]): ReportSnapshot {
     const {ids,inSql,period}=this.scope(query,branchIds)
+    const granularity: ReportTrendGranularity = query.trendGranularity ?? 'daily'
+    if (!granularities.has(granularity)) throw new Error('Select a valid chart granularity.')
+    const bucket = (col: string) => granularity === 'monthly' ? `substr(${col},1,7)` : granularity === 'weekly' ? `strftime('%Y-W%W',${col})` : col
     this.db.exec('BEGIN')
     try {
       const value=(sql:string,params:SQLInputValue[]=period)=>this.number(sql,params)
+      const signed=(raw: unknown,label: string)=>{const n=Number(raw);if(!Number.isSafeInteger(n))throw new Error(`${label} exceeds the supported range.`);return n}
       const sum=(table:string,amount:string,date='business_date')=>value(`SELECT COALESCE(SUM(${amount}),0) AS value FROM ${table} WHERE branch_id IN ${inSql} AND ${date} BETWEEN ? AND ?`)
-      const salesPaisa=value(`SELECT COALESCE(SUM(total_paisa),0) AS value FROM sales WHERE status!='voided' AND branch_id IN ${inSql} AND business_date BETWEEN ? AND ?`),returnsPaisa=sum('sale_returns','total_paisa',"date(occurred_at,'+5 hours')")
+      const salesPaisa=value(`SELECT COALESCE(SUM(total_paisa),0) AS value FROM sales WHERE status!='voided' AND branch_id IN ${inSql} AND business_date BETWEEN ? AND ?`),returnsPaisa=sum('sale_returns','total_paisa',"date(occurred_at,'+5 hours')")+sum('manual_returns','total_paisa','business_date')
       const costPaisa=value(`SELECT COALESCE(SUM(cost),0) AS value FROM ${saleFacts} WHERE branch_id IN ${inSql} AND business_date BETWEEN ? AND ?`)
       const expensesPaisa=sum(expenseFacts,'amount_paisa'),netSalesPaisa=salesPaisa-returnsPaisa,grossProfitPaisa=netSalesPaisa-costPaisa
+      const invoiceCount=value(`SELECT COUNT(*) AS value FROM sales WHERE status!='voided' AND branch_id IN ${inSql} AND business_date BETWEEN ? AND ?`)
+      const itemsSoldMilli=value(`SELECT COALESCE(SUM(qty_milli),0) AS value FROM ${itemFacts} f WHERE f.branch_id IN ${inSql} AND f.business_date BETWEEN ? AND ?`)
+      const averageInvoicePaisa=invoiceCount>0?Math.round(salesPaisa/invoiceCount):0
+      const newCustomersCount=value(`SELECT COUNT(*) AS value FROM customers WHERE business_id=? AND is_active=1 AND is_walk_in=0 AND date(created_at,'+5 hours') BETWEEN ? AND ?`,[this.businessId,query.dateFrom,query.dateTo])
       const balance=(table:string,positive:boolean)=>value(`SELECT COALESCE(SUM(${positive?'MAX(balance,0)':'MAX(-balance,0)'}),0) AS value FROM (SELECT SUM(debit_paisa-credit_paisa) AS balance FROM ${table} WHERE branch_id IN ${inSql} GROUP BY branch_id,${table==='customer_ledger'?'customer_id':'supplier_id'})`,ids)
-      const payments=(this.db.prepare(`SELECT COALESCE(method,'Unpaid') AS method,SUM(amount) AS amount FROM ${saleFacts} WHERE branch_id IN ${inSql} AND business_date BETWEEN ? AND ? GROUP BY method ORDER BY method`).all(...period) as Row[]).map(row=>({method:String(row.method),netSalesPaisa:Number(row.amount)}))
+      const payments=(this.db.prepare(`SELECT COALESCE(method,'Unpaid') AS method,SUM(amount) AS amount FROM ${saleFacts} WHERE branch_id IN ${inSql} AND business_date BETWEEN ? AND ? GROUP BY method ORDER BY amount DESC,method ASC`).all(...period) as Row[]).map(row=>({method:String(row.method),netSalesPaisa:signed(row.amount,'Payment report total')}))
+      const salesTrend: ReportTrendPoint[] = (this.db.prepare(`SELECT period_key,
+        SUM(sales_paisa) AS sales_paisa,
+        SUM(returns_paisa) AS returns_paisa,
+        SUM(sales_paisa)-SUM(returns_paisa) AS net_sales_paisa,
+        (SUM(sales_paisa)-SUM(returns_paisa))-SUM(net_cost_paisa) AS gross_profit_paisa
+        FROM (
+          SELECT ${bucket('s.business_date')} AS period_key,s.total_paisa AS sales_paisa,0 AS returns_paisa,s.cost_paisa AS net_cost_paisa
+          FROM sales s WHERE s.status!='voided' AND s.branch_id IN ${inSql} AND s.business_date BETWEEN ? AND ?
+          UNION ALL
+          SELECT ${bucket("date(r.occurred_at,'+5 hours')")} AS period_key,0 AS sales_paisa,r.total_paisa AS returns_paisa,-r.cost_paisa AS net_cost_paisa
+          FROM sale_returns r WHERE r.branch_id IN ${inSql} AND date(r.occurred_at,'+5 hours') BETWEEN ? AND ?
+          UNION ALL
+          SELECT ${bucket('mr.business_date')} AS period_key,0 AS sales_paisa,mr.total_paisa AS returns_paisa,-mr.cost_paisa AS net_cost_paisa
+          FROM manual_returns mr WHERE mr.branch_id IN ${inSql} AND mr.business_date BETWEEN ? AND ?
+        ) t GROUP BY period_key ORDER BY period_key ASC`).all(...period,...period,...period) as Row[]).map(row=>({
+        periodKey:String(row.period_key),
+        label:trendLabel(String(row.period_key),granularity),
+        salesPaisa:requireSafeInteger(Number(row.sales_paisa),'Trend sales'),
+        returnsPaisa:requireSafeInteger(Number(row.returns_paisa),'Trend returns'),
+        netSalesPaisa:signed(row.net_sales_paisa,'Trend net sales'),
+        grossProfitPaisa:signed(row.gross_profit_paisa,'Trend gross profit'),
+      }))
+      const categorySales: ReportCategoryPoint[] = (this.db.prepare(`SELECT f.category,COALESCE(SUM(f.amount_paisa),0) AS net_sales_paisa,COALESCE(SUM(f.qty_milli),0) AS net_qty_milli FROM ${itemFacts} f WHERE f.branch_id IN ${inSql} AND f.business_date BETWEEN ? AND ? GROUP BY f.category HAVING COALESCE(SUM(f.amount_paisa),0)!=0 OR COALESCE(SUM(f.qty_milli),0)!=0 ORDER BY net_sales_paisa DESC,f.category ASC`).all(...period) as Row[]).map(row=>({
+        category:String(row.category),
+        netSalesPaisa:signed(row.net_sales_paisa,'Category sales'),
+        quantityMilli:signed(row.net_qty_milli,'Category quantity'),
+      }))
+      const topProducts: ReportTopProduct[] = (this.db.prepare(`SELECT f.product_id,f.product_name,f.category,f.unit,COALESCE(SUM(f.qty_milli),0) AS net_qty_milli,COALESCE(SUM(f.amount_paisa),0) AS net_sales_paisa FROM ${itemFacts} f WHERE f.branch_id IN ${inSql} AND f.business_date BETWEEN ? AND ? GROUP BY f.product_id,f.product_name,f.category,f.unit HAVING COALESCE(SUM(f.amount_paisa),0)>0 OR COALESCE(SUM(f.qty_milli),0)>0 ORDER BY net_sales_paisa DESC,net_qty_milli DESC,f.product_name ASC LIMIT 10`).all(...period) as Row[]).map(row=>({
+        productId:String(row.product_id),
+        name:String(row.product_name),
+        category:String(row.category),
+        unit:String(row.unit),
+        quantityMilli:signed(row.net_qty_milli,'Product quantity'),
+        netSalesPaisa:signed(row.net_sales_paisa,'Product sales'),
+      }))
+      const staffSales: ReportStaffSale[] = (this.db.prepare(`SELECT u.id AS user_id,u.name AS name,
+        SUM(t.inv_count) AS invoice_count,
+        SUM(t.sales_paisa) AS sales_paisa,
+        SUM(t.returns_paisa) AS returns_paisa,
+        SUM(t.sales_paisa)-SUM(t.returns_paisa) AS net_sales_paisa
+        FROM (
+          SELECT s.cashier_id AS uid,1 AS inv_count,s.total_paisa AS sales_paisa,0 AS returns_paisa
+          FROM sales s WHERE s.status!='voided' AND s.branch_id IN ${inSql} AND s.business_date BETWEEN ? AND ?
+          UNION ALL
+          SELECT COALESCE(s.cashier_id,r.created_by) AS uid,0 AS inv_count,0 AS sales_paisa,r.total_paisa AS returns_paisa
+          FROM sale_returns r JOIN sales s ON s.id=r.sale_id WHERE r.branch_id IN ${inSql} AND date(r.occurred_at,'+5 hours') BETWEEN ? AND ?
+          UNION ALL
+          SELECT mr.created_by AS uid,0 AS inv_count,0 AS sales_paisa,mr.total_paisa AS returns_paisa
+          FROM manual_returns mr WHERE mr.branch_id IN ${inSql} AND mr.business_date BETWEEN ? AND ?
+        ) t JOIN users u ON u.id=t.uid GROUP BY u.id,u.name ORDER BY net_sales_paisa DESC,invoice_count DESC,u.name ASC`).all(...period,...period,...period) as Row[]).map(row=>({
+        userId:String(row.user_id),
+        name:String(row.name),
+        invoiceCount:requireSafeInteger(Number(row.invoice_count),'Staff invoices'),
+        salesPaisa:requireSafeInteger(Number(row.sales_paisa),'Staff sales'),
+        returnsPaisa:requireSafeInteger(Number(row.returns_paisa),'Staff returns'),
+        netSalesPaisa:signed(row.net_sales_paisa,'Staff net sales'),
+      }))
+      const recentSales: ReportRecentSale[] = (this.db.prepare(`SELECT s.id,s.invoice_number,s.completed_at,c.name AS customer_name,
+        COALESCE((SELECT GROUP_CONCAT(sp.method,', ') FROM sale_payments sp WHERE sp.sale_id=s.id),'Unpaid') AS payment_method,
+        s.total_paisa,s.status
+        FROM sales s JOIN customers c ON c.id=s.customer_id
+        WHERE s.branch_id IN ${inSql} AND s.business_date BETWEEN ? AND ? AND s.status!='voided'
+        ORDER BY s.completed_at DESC,s.rowid DESC LIMIT 10`).all(...period) as Row[]).map(row=>({
+        id:String(row.id),
+        invoiceNumber:String(row.invoice_number),
+        completedAt:String(row.completed_at),
+        customerName:String(row.customer_name),
+        paymentMethod:String(row.payment_method),
+        totalPaisa:requireSafeInteger(Number(row.total_paisa),'Recent sale total'),
+        status:String(row.status),
+      }))
+      const expenseByCategory: ReportExpenseCategory[] = (this.db.prepare(`SELECT category,SUM(amount_paisa) AS net FROM ${expenseFacts} WHERE branch_id IN ${inSql} AND business_date BETWEEN ? AND ? GROUP BY category ORDER BY net DESC,category ASC`).all(...period) as Row[]).map(row=>({
+        category:String(row.category),
+        netPaisa:signed(row.net,'Expense category total'),
+      }))
       const stockSummary=this.stockSummary(ids)
       const inTransitValuePaisa=value(`SELECT COALESCE(SUM(i.cost_paisa),0) AS value FROM stock_transfer_items i JOIN stock_transfers t ON t.id=i.transfer_id WHERE t.source_branch_id IN ${inSql} AND t.status='dispatched'`,ids)
       const summary={...stockSummary,inTransitValuePaisa,inventoryValuePaisa:stockSummary.valuePaisa+inTransitValuePaisa,salesPaisa,returnsPaisa,netSalesPaisa,costPaisa,grossProfitPaisa,expensesPaisa,operatingProfitPaisa:grossProfitPaisa-expensesPaisa,purchasesPaisa:sum('purchases','total_paisa'),collectionsPaisa:sum('customer_receipts','amount_paisa'),supplierPaymentsPaisa:sum('supplier_payments','amount_paisa'),customerDuePaisa:balance('customer_ledger',true),customerCreditPaisa:balance('customer_ledger',false),supplierDuePaisa:balance('supplier_ledger',true),supplierCreditPaisa:balance('supplier_ledger',false),
         estimatedCostLines:value(`SELECT COUNT(*) AS value FROM sale_items i JOIN sales s ON s.id=i.sale_id LEFT JOIN sale_item_costs c ON c.sale_item_id=i.id WHERE s.branch_id IN ${inSql} AND s.business_date BETWEEN ? AND ? AND COALESCE(c.estimated,1)=1`)+value(`SELECT COUNT(*) AS value FROM sale_return_items i JOIN sale_returns r ON r.id=i.return_id LEFT JOIN sale_item_costs c ON c.sale_item_id=i.sale_item_id WHERE r.branch_id IN ${inSql} AND date(r.occurred_at,'+5 hours') BETWEEN ? AND ? AND COALESCE(c.estimated,1)=1`),
-        stockAdjustmentCostPaisa:value(`SELECT COALESCE(SUM(v.cost_delta_paisa),0) AS value FROM stock_value_movements v JOIN stock_movements m ON m.id=v.movement_id WHERE m.branch_id IN ${inSql} AND date(m.occurred_at,'+5 hours') BETWEEN ? AND ? AND m.reference_type='stock_adjustment'`)}
+        stockAdjustmentCostPaisa:value(`SELECT COALESCE(SUM(v.cost_delta_paisa),0) AS value FROM stock_value_movements v JOIN stock_movements m ON m.id=v.movement_id WHERE m.branch_id IN ${inSql} AND date(m.occurred_at,'+5 hours') BETWEEN ? AND ? AND m.reference_type='stock_adjustment'`),
+        invoiceCount,itemsSoldMilli,averageInvoicePaisa,newCustomersCount}
       for(const amount of Object.values(summary)) if(!Number.isSafeInteger(amount))throw new Error('Report total exceeds the supported range.')
-      const result={businessName:String(this.db.prepare('SELECT name FROM businesses WHERE id=?').get(this.businessId)!.name),branchNames:(this.db.prepare(`SELECT name FROM branches WHERE id IN ${inSql} ORDER BY name`).all(...ids) as Row[]).map(row=>String(row.name)),dateFrom:query.dateFrom,dateTo:query.dateTo,generatedAt:this.now().toISOString(),summary,payments,table:this.table(query,ids)}
+      const result={businessName:String(this.db.prepare('SELECT name FROM businesses WHERE id=?').get(this.businessId)!.name),branchNames:(this.db.prepare(`SELECT name FROM branches WHERE id IN ${inSql} ORDER BY name`).all(...ids) as Row[]).map(row=>String(row.name)),dateFrom:query.dateFrom,dateTo:query.dateTo,generatedAt:this.now().toISOString(),summary,payments,salesTrend,categorySales,topProducts,staffSales,recentSales,expenseByCategory,table:this.table(query,ids)}
       this.db.exec('COMMIT');return result
     } catch(error){this.db.exec('ROLLBACK');throw error}
   }

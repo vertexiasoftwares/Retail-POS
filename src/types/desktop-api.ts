@@ -134,6 +134,8 @@ export type PosCompleteSaleRequest = {
   operationId?: string
   branchId: string
   customerId: string
+  customerName?: string
+  customerPhone?: string
   lines: PosCartLineInput[]
   paymentMethod: PosPaymentMethod
   cashReceivedPaisa: number
@@ -144,6 +146,7 @@ export type PosCompletedSale = {
   invoiceNumber: string
   completedAt: string
   customerName: string
+  customerPhone?: string | null
   paymentMethod: PosPaymentMethod
   subtotalPaisa: number
   discountPaisa: number
@@ -226,11 +229,13 @@ export type ProductSaveInput = {
 
 export type ProductImportResult = { imported:number }
 
-export type SalesPeriod = 'today'|'this_week'|'this_month'
+export type SalesPeriod = 'today'|'yesterday'|'this_week'|'this_month'|'last_month'|'custom'
 export type SalesStatusFilter = 'all'|'completed'|'partially_returned'|'returned'|'voided'
 export type SalesListQuery = {
   branchId:string
   period:SalesPeriod
+  dateFrom?:string
+  dateTo?:string
   search:string
   paymentMethod:string
   status:SalesStatusFilter
@@ -241,7 +246,7 @@ export type SalesChartPoint = { label:string;valuePaisa:number;returnedPaisa:num
 export type SalesPaymentSummary = { method:string;amountPaisa:number }
 export type SalesListRow = {
   id:string;invoiceNumber:string;completedAt:string;customerName:string;cashierName:string
-  itemCount:number;totalPaisa:number;returnedPaisa:number;netPaisa:number;paymentMethod:string
+  itemCount:number;itemNames?:string;totalPaisa:number;returnedPaisa:number;netPaisa:number;paymentMethod:string
   status:'completed'|'partially_returned'|'returned'|'voided'
 }
 export type SalesSnapshot = {
@@ -263,10 +268,68 @@ export type SalesDetail = SalesListRow & {
 }
 export type SalesReturnRequest = {
   operationId?:string
-  branchId:string;saleId:string;reason:string
+  branchId:string;saleId:string;reason?:string
   lines:Array<{saleItemId:string;quantityMilli:number}>
 }
 export type SalesReturnResult = { returnId:string;returnNumber:string;refundMethod:string;totalPaisa:number;occurredAt:string }
+
+export type ManualReturnLineInput = {
+  productId:string
+  quantityMilli:number
+  unitPricePaisa:number
+}
+export type ManualReturnRequest = {
+  operationId?:string
+  branchId:string
+  customerId:string
+  refundMethod:PosPaymentMethod
+  reason?:string
+  lines:ManualReturnLineInput[]
+}
+export type ManualReturnResult = {
+  returnId:string
+  returnNumber:string
+  refundMethod:string
+  totalPaisa:number
+  occurredAt:string
+}
+export type ReturnHistoryLine = {
+  productName:string
+  quantityMilli:number
+  refundPaisa:number
+}
+export type ReturnHistoryRow = {
+  id:string
+  returnNumber:string
+  returnType:'bill'|'manual'
+  invoiceNumber:string|null
+  saleId:string|null
+  customerName:string
+  cashierName:string
+  refundMethod:string
+  reason:string
+  totalPaisa:number
+  occurredAt:string
+  items:ReturnHistoryLine[]
+}
+export type ReturnsListQuery = {
+  branchId:string
+  period:SalesPeriod
+  dateFrom?:string
+  dateTo?:string
+  search:string
+  returnType:'all'|'bill'|'manual'
+  refundMethod:string
+}
+export type ReturnsSnapshot = {
+  businessDate:string
+  rangeLabel:string
+  totalReturnsCount:number
+  totalRefundedPaisa:number
+  billReturnCount:number
+  manualReturnCount:number
+  returns:ReturnHistoryRow[]
+}
 
 export type RetailPaymentMethod = 'Cash'|'Bank Transfer'|'JazzCash'|'Easypaisa'|'Card'
 export type StockAdjustmentRequest = { branchId:string;operationId:string;productId:string;quantityDeltaMilli:number;reason:string }
@@ -421,17 +484,33 @@ export type VertexiaDesktopApi = {
   sales: {
     getSnapshot(query:SalesListQuery): Promise<SalesSnapshot>
     getDetail(branchId:string,saleId:string): Promise<SalesDetail>
+    findByInvoice(branchId:string,invoiceNumber:string): Promise<SalesDetail|null>
     createReturn(request:SalesReturnRequest): Promise<SalesReturnResult>
+    createManualReturn(request:ManualReturnRequest): Promise<ManualReturnResult>
+    listReturns(query:ReturnsListQuery): Promise<ReturnsSnapshot>
     exportCsv(query:SalesListQuery): Promise<{ canceled:boolean;path?:string }>
   }
   system: {
     getDatabasePath(): Promise<string>
+    getSupportInfo(): Promise<SupportInfo>
+    openExternal(url: string): Promise<{ opened: boolean }>
   }
   zoom?: {
     setZoomFactor(factor: number): void
     getZoomFactor(): number
     onZoomFactorChange?(callback: (factor: number) => void): () => void
   }
+}
+
+export type SupportInfo = {
+  appVersion: string
+  os: string
+  databaseSizeBytes: number | null
+  licenseId: string
+  licenseStatus: string
+  licenseExpiryDate: string | null
+  deviceId: string
+  shopName: string
 }
 
 export type DesktopWindowState = {

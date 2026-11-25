@@ -10,7 +10,6 @@ export type RetailDataContextValue = {
   busy: boolean
   error: string
   businessDate: string
-  legacyDataAvailable: boolean
   refresh: () => Promise<void>
   products: ProductRecord[]
   movements: InventoryMovementRecord[]

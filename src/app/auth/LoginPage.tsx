@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from 'react'
 import { Icon } from '../../shared/ui/Icon'
-import { getStoredRegistration } from '../../services/cloudLicensing'
 import type { AuthSession } from '../../types/auth'
 
 type LoginPageProps = {
@@ -21,11 +20,7 @@ export function LoginPage({
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const storedReg = getStoredRegistration()
-  const displayBusinessName =
-    (businessName && businessName.toLowerCase() !== 'taha' ? businessName : storedReg?.businessName) ||
-    businessName ||
-    'your retail mart'
+  const displayBusinessName = businessName?.trim() || 'your retail mart'
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -40,27 +35,6 @@ export function LoginPage({
       const session = await window.vertexia.auth.login(username.trim(), password)
       onSuccess(session)
     } catch (err: any) {
-      // Auto-heal: If local login failed, check if this is the registered store needing credential sync
-      const reg = getStoredRegistration()
-      if (reg && username.trim() && window.vertexia?.auth) {
-        try {
-          await window.vertexia.auth.setup({
-            businessName: reg.businessName || username.trim(),
-            branchName: 'Main Branch',
-            city: reg.city || 'Karachi',
-            ownerName: reg.ownerName || username.trim(),
-            username: username.trim(),
-            password: password,
-            force: true,
-          })
-          const retrySession = await window.vertexia.auth.login(username.trim(), password)
-          window.dispatchEvent(new Event('vertexia:auth-refresh'))
-          onSuccess(retrySession)
-          return
-        } catch (syncErr: any) {
-          console.warn('Auto credential sync notice:', syncErr?.message)
-        }
-      }
       setError(err?.message || 'Invalid username or password. Please try again.')
     } finally {
       setBusy(false)

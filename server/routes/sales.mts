@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { VertexiaDatabase } from '../../electron/database/database.mjs';
 import type { AuthRepository } from '../../electron/database/auth.mjs';
 import type { RealtimeSyncServer } from '../websocket.mjs';
-import type { SalesListQuery, SalesReturnRequest } from '../../src/types/desktop-api.js';
+import type { ManualReturnRequest, ReturnsListQuery, SalesListQuery, SalesReturnRequest } from '../../src/types/desktop-api.js';
 import { enforceAuth, ensureOperationId } from '../auth-guard.mjs';
 
 export function registerSalesRoutes(
@@ -96,6 +96,79 @@ export function registerSalesRoutes(
       return { canceled: false, csv, filename: `sales-${body.branchId}.csv` };
     } catch (err: any) {
       return reply.status(400).send({ error: 'ExportSalesCsvError', message: err?.message || 'Failed to export sales CSV.', statusCode: 400 });
+    }
+  });
+
+  // GET /api/sales/find-by-invoice?branchId=...&invoiceNumber=...
+  app.get('/api/sales/find-by-invoice', async (request, reply) => {
+    const query = request.query as { branchId?: string; invoiceNumber?: string };
+    if (!query.branchId || !query.invoiceNumber) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'branchId and invoiceNumber are required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'sales.read', query.branchId);
+    if (!guarded) return;
+
+    try {
+      const detail = db.findSaleByInvoiceNumber(query.branchId, query.invoiceNumber);
+      if (detail && !guarded.session.permissions.includes('dashboard.read')) {
+        detail.costPaisa = 0;
+      }
+      return detail;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'FindInvoiceError', message: err?.message || 'Failed to find invoice.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/sales/manual-return
+  app.post('/api/sales/manual-return', async (request, reply) => {
+    const body = request.body as ManualReturnRequest | undefined;
+    if (!body || !body.branchId) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'sales.return', body.branchId, true);
+    if (!guarded) return;
+
+    try {
+      const result = db.createManualReturn(ensureOperationId(body, guarded.session.userId));
+      sync?.broadcast({
+        type: 'sale:returned',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+        payload: {
+          returnId: result.returnId,
+          returnNumber: result.returnNumber,
+          totalPaisa: result.totalPaisa,
+        },
+      });
+      sync?.broadcast({
+        type: 'inventory:changed',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+      });
+      sync?.broadcast({
+        type: 'cash:updated',
+        branchId: body.branchId,
+        businessId: guarded.session.businessId,
+      });
+      return result;
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'ManualReturnError', message: err?.message || 'Manual return could not be processed.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/sales/returns
+  app.post('/api/sales/returns', async (request, reply) => {
+    const body = request.body as ReturnsListQuery | undefined;
+    if (!body || !body.branchId) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'sales.read', body.branchId);
+    if (!guarded) return;
+
+    try {
+      return db.getReturnsList(body);
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'ReturnsListError', message: err?.message || 'Failed to load returns.', statusCode: 400 });
     }
   });
 }

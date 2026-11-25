@@ -36,6 +36,22 @@ export function postOperation<T>(db: DatabaseSync, branchId: string, operationId
 
 // Keep existing human-readable formats, but never derive numbers from row counts.
 export function nextDocumentNumber(db: DatabaseSync, branchId: string, kind: 'sale' | 'return' | 'purchase', date: string): string {
+  if (kind === 'sale') {
+    const existingRows = db.prepare('SELECT invoice_number FROM sales WHERE branch_id=?').all(branchId) as Array<{ invoice_number: string }>
+    let maxExisting = 0
+    for (const r of existingRows) {
+      const match = String(r.invoice_number).match(/(\d+)$/)
+      if (match) {
+        const num = Number(match[1])
+        if (Number.isSafeInteger(num) && num > maxExisting) maxExisting = num
+      }
+    }
+    const baseline = Math.max(maxExisting, existingRows.length)
+    db.prepare('INSERT OR IGNORE INTO document_sequences(branch_id,kind,business_date,last_value) VALUES (?,?,?,?)').run(branchId, 'sale', 'GLOBAL', baseline)
+    const row = db.prepare('UPDATE document_sequences SET last_value=MAX(last_value,?)+1 WHERE branch_id=? AND kind=? AND business_date=? RETURNING last_value').get(baseline, branchId, 'sale', 'GLOBAL')!
+    return `BILL-${String(row.last_value).padStart(3, '0')}`
+  }
+
   const prefix = { sale: 'SAL', return: 'RET', purchase: 'PUR' }[kind]
   const table = { sale: 'sales', return: 'sale_returns', purchase: 'purchases' }[kind]
   const column = { sale: 'invoice_number', return: 'return_number', purchase: 'purchase_number' }[kind]
@@ -44,6 +60,22 @@ export function nextDocumentNumber(db: DatabaseSync, branchId: string, kind: 'sa
   db.prepare('INSERT OR IGNORE INTO document_sequences(branch_id,kind,business_date,last_value) VALUES (?,?,?,?)').run(branchId, kind, date, maximum)
   const row = db.prepare('UPDATE document_sequences SET last_value=MAX(last_value,?)+1 WHERE branch_id=? AND kind=? AND business_date=? RETURNING last_value').get(maximum, branchId, kind, date)!
   return `${start}${String(row.last_value).padStart(4, '0')}`
+}
+
+export function nextManualReturnNumber(db: DatabaseSync, branchId: string): string {
+  const existingRows = db.prepare('SELECT return_number FROM manual_returns WHERE branch_id=?').all(branchId) as Array<{ return_number: string }>
+  let maxExisting = 0
+  for (const r of existingRows) {
+    const match = String(r.return_number).match(/(\d+)$/)
+    if (match) {
+      const num = Number(match[1])
+      if (Number.isSafeInteger(num) && num > maxExisting) maxExisting = num
+    }
+  }
+  const baseline = Math.max(maxExisting, existingRows.length)
+  db.prepare('INSERT OR IGNORE INTO document_sequences(branch_id,kind,business_date,last_value) VALUES (?,?,?,?)').run(branchId, 'return', 'MANUAL', baseline)
+  const row = db.prepare('UPDATE document_sequences SET last_value=MAX(last_value,?)+1 WHERE branch_id=? AND kind=? AND business_date=? RETURNING last_value').get(baseline, branchId, 'return', 'MANUAL')!
+  return `MRET-${String(row.last_value).padStart(3, '0')}`
 }
 
 export function requireSafeInteger(value: unknown, label: string, minimum = 0): number {

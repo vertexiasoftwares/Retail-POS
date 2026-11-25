@@ -9,10 +9,10 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 }
 export function isUserRole(value: unknown): value is UserRole { return typeof value === 'string' && Object.hasOwn(rolePermissions, value) }
 export function canAccessPage(page: string, permissions: readonly Permission[], allowedTabs?: readonly string[]): boolean {
-  if (page === 'My Account' || page === 'Notifications') return true
+  if (page === 'Notifications' || page === 'Help Center') return true
   if (allowedTabs && Array.isArray(allowedTabs) && allowedTabs.length > 0) {
     return allowedTabs.includes(page)
   }
-  const required: Record<string, Permission> = { License: 'settings.manage', Branches: 'branches.manage', 'Stock Transfers': 'transfers.read', Reports: 'reports.read', Customers: 'customers.read', Expenses: 'expenses.read', Dashboard: 'dashboard.read', POS: 'pos.sell', Sales: 'sales.read', Products: 'products.read', Inventory: 'retail.read', Purchases: 'purchases.receive', Suppliers: 'suppliers.pay', Staff: 'users.manage', 'Cash & Shifts': 'shifts.read', Settings: 'settings.manage' }
+  const required: Record<string, Permission> = { License: 'settings.manage', Branches: 'branches.manage', 'Stock Transfers': 'transfers.read', Reports: 'reports.read', Customers: 'customers.read', Expenses: 'expenses.read', Dashboard: 'dashboard.read', POS: 'pos.sell', Sales: 'sales.read', 'Sales History': 'sales.read', Returns: 'sales.return', Products: 'products.read', Inventory: 'retail.read', Purchases: 'purchases.receive', Suppliers: 'suppliers.pay', Staff: 'users.manage', 'Cash & Shifts': 'shifts.read', Settings: 'settings.manage' }
   return Boolean(required[page] && permissions.includes(required[page]))
 }

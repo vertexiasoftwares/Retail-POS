@@ -552,4 +552,60 @@ export const migrations = [
       ) STRICT;
     `,
   },
+  {
+    version: 14,
+    sql: `
+      CREATE TABLE IF NOT EXISTS manual_returns (
+        id TEXT PRIMARY KEY,
+        branch_id TEXT NOT NULL REFERENCES branches(id),
+        customer_id TEXT NOT NULL REFERENCES customers(id),
+        return_number TEXT NOT NULL,
+        business_date TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        refund_method TEXT NOT NULL CHECK (refund_method IN ('Cash','Card','JazzCash','Easypaisa','Udhaar')),
+        total_paisa INTEGER NOT NULL CHECK (total_paisa > 0),
+        cost_paisa INTEGER NOT NULL CHECK (cost_paisa >= 0),
+        created_by TEXT NOT NULL REFERENCES users(id),
+        occurred_at TEXT NOT NULL,
+        shift_id TEXT REFERENCES cash_shifts(id),
+        UNIQUE (branch_id, return_number)
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS manual_return_items (
+        id TEXT PRIMARY KEY,
+        return_id TEXT NOT NULL REFERENCES manual_returns(id),
+        product_id TEXT NOT NULL REFERENCES products(id),
+        product_name_snapshot TEXT NOT NULL,
+        quantity_milli INTEGER NOT NULL CHECK (quantity_milli > 0),
+        unit_price_paisa INTEGER NOT NULL CHECK (unit_price_paisa >= 0),
+        refund_paisa INTEGER NOT NULL CHECK (refund_paisa >= 0),
+        cost_paisa INTEGER NOT NULL CHECK (cost_paisa >= 0)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_manual_returns_branch ON manual_returns(branch_id, occurred_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_manual_return_items_return ON manual_return_items(return_id);
+    `,
+  },
+  {
+    version: 15,
+    sql: `
+      INSERT INTO supplier_ledger (id, branch_id, supplier_id, entry_type, debit_paisa, credit_paisa, reference_id, occurred_at)
+      SELECT
+        'supplier-ledger-ob-' || sp.supplier_id,
+        (SELECT b.id FROM branches b WHERE b.business_id = s.business_id ORDER BY b.is_active DESC, b.created_at ASC, b.rowid ASC LIMIT 1),
+        s.id,
+        'opening_balance',
+        sp.opening_balance_paisa,
+        0,
+        s.id,
+        s.created_at
+      FROM supplier_profiles sp
+      JOIN suppliers s ON s.id = sp.supplier_id
+      WHERE sp.opening_balance_paisa > 0
+        AND EXISTS (SELECT 1 FROM branches b WHERE b.business_id = s.business_id)
+        AND NOT EXISTS (
+          SELECT 1 FROM supplier_ledger sl WHERE sl.supplier_id = s.id AND sl.entry_type = 'opening_balance'
+        );
+    `,
+  },
 ] as const

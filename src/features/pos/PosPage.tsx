@@ -5,6 +5,7 @@ import { PosDialogs,ReceiptDialog,type PosDialogName } from './PosDialogs'
 import { PosHeader } from './PosHeader'
 import { PosWorkspace } from './PosWorkspace'
 import { BarcodeScannerModal } from './BarcodeScannerModal'
+import { ShimmerLoading } from '../../shared/ui/ShimmerLoading'
 import { usePos } from './usePos'
 
 export default function PosPage(props:PageProps) {
@@ -30,9 +31,9 @@ export default function PosPage(props:PageProps) {
     pos.addProduct(product);setSearch('')
   }
 
-  const header=(onMenu:()=>void) => <PosHeader ref={searchRef} onMenu={onMenu} data={pos.data} search={search} onSearch={setSearch} onSearchEnter={addSearchMatch} customerId={pos.customerId} onCustomer={pos.setCustomerId} onAddCustomer={() => setDialog('customer')} onScan={() => setShowScanner(true)} onNavigate={props.onNavigate} />
+  const header=(onMenu:()=>void) => <PosHeader ref={searchRef} onMenu={onMenu} data={pos.data} search={search} onSearch={setSearch} onSearchEnter={addSearchMatch} onScan={() => setShowScanner(true)} onNavigate={props.onNavigate} />
   let content
-  if(pos.loading && !pos.data) content=<main className="pos-runtime-state"><span className="dashboard-spinner"/><h1>Loading POS</h1><p>Reading products, customers and shift status from SQLite…</p></main>
+  if(pos.loading && !pos.data) content=<ShimmerLoading fullScreen={false} title="Vertexia Retail POS" subtitle="Loading products, customers & shift records…" />
   else if(pos.error && !pos.data) content=<main className="pos-runtime-state error"><Icon name="warning" size={30}/><h1>POS unavailable</h1><p>{pos.error}</p><button onClick={() => void pos.refresh()}>Retry</button></main>
   else content=<PosWorkspace pos={pos} search={search} onCustom={() => setDialog('product')} onHeld={() => setDialog('held')} onDiscount={() => setDialog('discount')} onOpenShift={() => setDialog('shift')} />
 

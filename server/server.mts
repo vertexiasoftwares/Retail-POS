@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { VertexiaDatabase } from '../electron/database/database.mjs'
 import { AuthRepository } from '../electron/database/auth.mjs'
+import { BackupService } from '../electron/backup.mjs'
 import { requestActorStorage, type RequestActorContext } from '../electron/database/context.mjs'
 import { acquireDatabaseLock, type DatabaseLock } from './lock.mjs'
 import { RealtimeSyncServer } from './websocket.mjs'
@@ -86,6 +87,8 @@ export interface ServerOptions {
   staticPath?: string
   database?: VertexiaDatabase
   auth?: AuthRepository
+  backupService?: BackupService
+  backupDirectory?: string
   logger?: boolean | object
 }
 
@@ -147,8 +150,13 @@ export async function createServer(options: ServerOptions = {}): Promise<ServerI
     }
   }
 
-  // 2. Initialize Fastify & Auth Repository
+  // 2. Initialize Fastify, Auth Repository & Backup Service
   const auth = options.auth ?? new AuthRepository(db.connection)
+  const backups =
+    options.backupService ??
+    (databasePath !== ':memory:'
+      ? new BackupService(() => db, databasePath, options.backupDirectory ?? join(dirname(databasePath), 'backups'))
+      : undefined)
   const app = fastify({
     logger: options.logger ?? (process.env.NODE_ENV === 'test' ? false : { level: 'info' }),
   })
@@ -249,7 +257,7 @@ export async function createServer(options: ServerOptions = {}): Promise<ServerI
   registerRetailRoutes(app, db, auth, syncServer)
   registerReportsRoutes(app, db, auth, syncServer)
   registerBranchesRoutes(app, db, auth, syncServer)
-  registerSystemRoutes(app, db, auth, syncServer)
+  registerSystemRoutes(app, db, auth, syncServer, backups)
 
   // 7. Catch-all for undefined /api/* routes (returns structured JSON 404)
   app.all('/api/*', async (request, reply) => {

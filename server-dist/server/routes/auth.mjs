@@ -67,6 +67,7 @@ export function registerAuthRoutes(app, db, auth, sync) {
                 branches: session.branches,
                 branchId: session.branchId,
                 permissions: session.permissions,
+                allowedTabs: session.allowedTabs,
                 mustChangePassword: session.mustChangePassword,
             },
         };

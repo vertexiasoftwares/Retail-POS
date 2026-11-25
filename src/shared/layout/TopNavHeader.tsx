@@ -27,7 +27,7 @@ export function TopNavHeader({
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <img
-            src="/Retail_POS_Logo-removebg-preview.png"
+            src="/retail-logo-transparent.png"
             alt="Vertexia Retail POS"
             style={{
               height: '38px',

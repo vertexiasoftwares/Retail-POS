@@ -55,9 +55,6 @@ export function RetailDataProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const busyRef = useRef(false)
   const refreshVersion = useRef(0)
-  const [legacyDataAvailable] = useState(() => {
-    try { return window.localStorage.getItem('vertexia.product-inventory.v1') !== null } catch { return false }
-  })
 
   const refresh = useCallback(async () => {
     if (!allowed) { setLoading(false); return }
@@ -103,7 +100,7 @@ export function RetailDataProvider({ children }: { children: ReactNode }) {
   const adjustStock = (productId: string, delta: number, reason: string, operationId: string) => run(() => window.vertexia!.retail.adjustStock({ branchId, operationId, productId, quantityDeltaMilli: toFixedUnits(delta, 1000, 'Quantity'), reason }))
   const receivePurchase = (draft: PurchaseDraft, operationId: string) => run(() => window.vertexia!.retail.receivePurchase({ branchId, operationId, supplierName: draft.supplier, supplierInvoiceNumber: draft.supplierInvoiceNumber, businessDate: draft.purchaseDate, paidAmountPaisa: toFixedUnits(draft.paidAmountRupees, 100, 'Paid amount'), paymentMethod: draft.paymentMethod, lines: draft.items.map(line => ({ productId: line.productId, quantityMilli: toFixedUnits(line.quantity, 1000, 'Quantity'), unitCostPaisa: toFixedUnits(line.unitCostRupees, 100, 'Unit cost') })) }))
   const paySupplier = (supplierId: string, amount: number, method: SupplierPaymentMethod, reference: string, operationId: string) => run(() => window.vertexia!.retail.paySupplier({ branchId, operationId, supplierId, amountPaisa: toFixedUnits(amount, 100, 'Payment'), method, reference }))
-  const createSupplier = (name: string | any, phone?: string) => run(() => window.vertexia!.retail.createSupplier(name, phone))
+  const createSupplier = (name: string | any, phone?: string) => run(() => window.vertexia!.retail.createSupplier(typeof name === 'object' && name !== null ? { branchId, ...name } : { branchId, name, phone }))
 
-  return <RetailDataContext.Provider value={{ ...snapshot, loading, busy, error, legacyDataAvailable, refresh, adjustStock, receivePurchase, paySupplier, createSupplier }}>{children}</RetailDataContext.Provider>
+  return <RetailDataContext.Provider value={{ ...snapshot, loading, busy, error, refresh, adjustStock, receivePurchase, paySupplier, createSupplier }}>{children}</RetailDataContext.Provider>
 }

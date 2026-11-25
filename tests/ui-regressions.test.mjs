@@ -1,0 +1,232 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import { VertexiaDatabase } from '../electron-dist/electron/database/database.mjs'
+
+const readRepoFile = rel => readFileSync(join(process.cwd(), rel), 'utf8')
+
+test('CustomSelect guards against infinite useLayoutEffect loop when DateRangeFilter opens', () => {
+  const src = readRepoFile('src/shared/ui/CustomSelect.tsx')
+
+  // Must carry explicit dependency arrays on both useLayoutEffect and useEffect
+  assert.match(
+    src,
+    /useLayoutEffect\(\s*\(\)\s*=>\s*\{[\s\S]*?\},\s*\[open,\s*updatePosition\]\s*\)/,
+    'CustomSelect useLayoutEffect must include [open, updatePosition] dependency array'
+  )
+  assert.match(
+    src,
+    /useEffect\(\s*\(\)\s*=>\s*\{[\s\S]*?\},\s*\[open,\s*updatePosition\]\s*\)/,
+    'CustomSelect useEffect must include [open, updatePosition] dependency array'
+  )
+
+  // Must compare coords before updating state so identical position values bail out cleanly
+  assert.match(
+    src,
+    /setCoords\(prev\s*=>[\s\S]*prev\.top === nextCoords\.top[\s\S]*prev\.left === nextCoords\.left[\s\S]*prev\.width === nextCoords\.width[\s\S]*prev\.openUp === nextCoords\.openUp[\s\S]*\?\s*prev\s*:\s*nextCoords/
+  )
+})
+
+test('ReturnsPage displays recent bill numbers vertically in clean full-width rows and PurchasesPage wires DateRangeFilter', () => {
+  const returnsSrc = readRepoFile('src/features/returns/ReturnsPage.tsx')
+  // Vertical stacked list rather than horizontal wrapping pill strip
+  assert.equal(returnsSrc.includes('text-[11px] font-semibold cursor-pointer transition-all'), false)
+  assert.match(returnsSrc, /className="border border-slate-200 rounded-xl overflow-hidden bg-white divide-y divide-slate-100"/)
+  assert.match(returnsSrc, /\{b\.invoiceNumber\}/)
+  assert.match(returnsSrc, /Click any bill row below to load items/)
+
+  const purchasesSrc = readRepoFile('src/features/purchases/PurchasesPage.tsx')
+  assert.match(purchasesSrc, /<DateRangeFilter value=\{dateRange \?\? undefined\} onChange=\{setDateRange\} \/>/)
+  assert.match(purchasesSrc, /p\.purchaseDate >= dateRange\.startDate && p\.purchaseDate <= dateRange\.endDate/)
+})
+
+test('getSalesSnapshot and getReturnsList support all DateRangeFilter presets without errors', () => {
+  const now = new Date('2026-10-15T12:00:00+05:00')
+  const db = new VertexiaDatabase(':memory:', () => now)
+  try {
+    const product = db.createPosProduct('branch-main', {
+      name: 'Daal Chana 1kg',
+      barcode: '8877665544331',
+      category: 'Grocery',
+      unit: 'Kg',
+      purchasePricePaisa: 20_000,
+      sellingPricePaisa: 25_000,
+      openingStockMilli: 10_000,
+    })
+    db.openPosShift('branch-main', 50_000)
+
+    const sale = db.completePosSale({
+      branchId: 'branch-main',
+      customerId: 'customer-walk-in',
+      lines: [{ productId: product.id, quantityMilli: 2_000, discountBasisPoints: 0 }],
+      paymentMethod: 'Cash',
+      cashReceivedPaisa: 50_000,
+    })
+    const detail = db.getSalesDetail('branch-main', sale.saleId)
+    db.createSalesReturn({
+      branchId: 'branch-main',
+      saleId: sale.saleId,
+      reason: '',
+      lines: [{ saleItemId: detail.lines[0].id, quantityMilli: 1_000 }],
+    })
+
+    for (const period of ['today', 'yesterday', 'this_week', 'this_month', 'last_month']) {
+      const salesSnap = db.getSalesSnapshot({
+        branchId: 'branch-main',
+        period,
+        search: '',
+        paymentMethod: 'all',
+        status: 'all',
+        page: 1,
+        pageSize: 10,
+      })
+      const returnsSnap = db.getReturnsList({
+        branchId: 'branch-main',
+        period,
+        returnType: 'all',
+        refundMethod: 'all',
+      })
+      assert.equal(typeof salesSnap.total, 'number')
+      assert.equal(typeof returnsSnap.totalReturnsCount, 'number')
+      if (period === 'today') {
+        assert.equal(salesSnap.total, 1)
+        assert.equal(returnsSnap.totalReturnsCount, 1)
+      }
+      if (period === 'yesterday' || period === 'last_month') {
+        assert.equal(salesSnap.total, 0)
+        assert.equal(returnsSnap.totalReturnsCount, 0)
+      }
+    }
+
+    const customReturns = db.getReturnsList({
+      branchId: 'branch-main',
+      period: 'custom',
+      dateFrom: '2026-10-01',
+      dateTo: '2026-10-31',
+      returnType: 'all',
+      refundMethod: 'all',
+    })
+    assert.equal(customReturns.totalReturnsCount, 1)
+  } finally {
+    db.close()
+  }
+})
+
+test('exportUtils generates real .xlsx OOXML workbook and direct binary PDF downloads without print preview', () => {
+  const src = readRepoFile('src/shared/utils/exportUtils.ts')
+  // Real OOXML Excel workbook (never HTML spoofed as .xls and never .csv)
+  assert.equal(src.includes('<x:ExcelWorkbook>'), false)
+  assert.equal(src.includes("type: 'text/csv;charset=utf-8;'"), false)
+  assert.match(src, /application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/)
+  assert.match(src, /xl\/worksheets\/sheet1\.xml/)
+  assert.match(src, /xl\/workbook\.xml/)
+  assert.match(src, /xl\/sharedStrings\.xml/)
+  assert.match(src, /\[Content_Types\]\.xml/)
+  assert.match(src, /\+ '\.xlsx'/)
+  // Direct binary PDF download (no window.open / window.print popup)
+  assert.equal(src.includes('window.open('), false)
+  assert.equal(src.includes('window.print('), false)
+  assert.match(src, /%PDF-1\.4/)
+  assert.match(src, /new Blob\(\[pdfBuffer\],\s*\{\s*type:\s*'application\/pdf'\s*\}\)/)
+})
+
+test('My Account is removed, Sidebar shows Settings and Help without Sign out, Shimmer runs large Loading text only on reload & Refresh', () => {
+  const routesSrc = readRepoFile('src/app/routes.ts')
+  const typesSrc = readRepoFile('src/types/index.ts')
+  const policySrc = readRepoFile('src/shared/auth-policy.ts')
+  const ownerSrc = readRepoFile('src/shared/layout/OwnerDropdown.tsx')
+  const sidebarSrc = readRepoFile('src/shared/layout/Sidebar.tsx')
+  const reportsSrc = readRepoFile('src/features/reports/ReportsPage.tsx')
+  const appSrc = readRepoFile('src/App.tsx')
+  const shimmerSrc = readRepoFile('src/shared/ui/TextShimmer.tsx')
+
+  assert.equal(routesSrc.includes('My Account'), false)
+  assert.equal(typesSrc.includes('My Account'), false)
+  assert.equal(policySrc.includes('My Account'), false)
+  assert.equal(ownerSrc.includes('My Account'), false)
+  assert.match(ownerSrc, /Sign Out/)
+
+  assert.equal(sidebarSrc.includes('My Account'), false)
+  assert.equal(sidebarSrc.includes('Sign out'), false)
+  assert.match(sidebarSrc, /onNavigate\('Settings'\)/)
+  assert.match(sidebarSrc, /setShowHelp\(/)
+  assert.match(sidebarSrc, /onNavigate\('Help Center'\)/)
+
+  assert.match(reportsSrc, /<DateRangeFilter/)
+  assert.equal(reportsSrc.includes('Select branch scope'), false)
+  assert.match(reportsSrc, /triggerRefreshShimmer\(\)/)
+
+  assert.match(appSrc, /PageTransitionShimmer/)
+  assert.equal(appSrc.includes('key={pageKey}'), false)
+  assert.match(shimmerSrc, /fontSize:\s*'36px'/)
+})
+
+test('Settings tabs are horizontal on top, Display tab removed, Receipt wraps text with Shift+Enter, and TopNavHeader matches Sidebar logo', () => {
+  const settingsSrc = readRepoFile('src/features/settings/SettingsPage.tsx')
+  const headerSrc = readRepoFile('src/shared/layout/TopNavHeader.tsx')
+  const posDialogsSrc = readRepoFile('src/features/pos/PosDialogs.tsx')
+  const posCssSrc = readRepoFile('src/features/pos/pos.css')
+
+  // Top horizontal tab bar & no Display tab
+  assert.equal(settingsSrc.includes("'Display'"), false)
+  assert.equal(settingsSrc.includes('Display &amp; App'), false)
+  assert.match(settingsSrc, /flexDirection:\s*'column'/)
+  assert.match(settingsSrc, /flexWrap:\s*'wrap'/)
+
+  // Receipt textarea + Shift+Enter hint + overflow protection
+  assert.match(settingsSrc, /Shift \+ Enter/)
+  assert.match(settingsSrc, /overflowWrap:\s*'anywhere'/)
+  assert.match(settingsSrc, /whiteSpace:\s*'pre-wrap'/)
+  assert.match(posCssSrc, /overflow-wrap:\s*anywhere/)
+  assert.match(posCssSrc, /white-space:\s*pre-wrap/)
+
+  // Navbar and receipt logos match sidebar logo
+  assert.match(headerSrc, /src="\/retail-logo-transparent\.png"/)
+  assert.equal(headerSrc.includes('Retail_POS_Logo-removebg-preview.png'), false)
+  assert.match(posDialogsSrc, /src="\/retail-logo-transparent\.png"/)
+})
+
+test('Help Card & Help Center use single support config, proper WhatsApp URL encoding, safe clipboard fields, offline bundle, and Cashier access', () => {
+  const configSrc = readRepoFile('src/shared/config/supportConfig.ts')
+  const dictSrc = readRepoFile('src/shared/i18n/helpDictionary.ts')
+  const sidebarSrc = readRepoFile('src/shared/layout/Sidebar.tsx')
+  const helpPageSrc = readRepoFile('src/features/help/HelpCenterPage.tsx')
+  const policySrc = readRepoFile('src/shared/auth-policy.ts')
+  const routesSrc = readRepoFile('src/app/routes.ts')
+
+  // Single config file holds phone/WhatsApp/hours — components reference SUPPORT_CONFIG, never hardcoded numbers
+  assert.match(configSrc, /supportNumber:\s*'\+92 3XX XXXXXXX'/)
+  assert.match(configSrc, /Mon to Sat, 10:00 AM to 8:00 PM/)
+  assert.equal(sidebarSrc.includes('+92 3XX XXXXXXX'), false)
+  assert.equal(helpPageSrc.includes('+92 3XX XXXXXXX'), false)
+  assert.match(sidebarSrc, /SUPPORT_CONFIG/)
+  assert.match(helpPageSrc, /SUPPORT_CONFIG/)
+
+  // WhatsApp URL format & URL encoding
+  assert.match(configSrc, /https:\/\/wa\.me\/\$\{phone\}\?text=\$\{encodeURIComponent\(message\)\}/)
+  assert.match(configSrc, /Hello Vertexia Support, I need help with my POS\.\\n/)
+
+  // Safe clipboard support info contains ONLY the 5 technical fields
+  const clipBlock = configSrc.match(/buildSupportClipboardText[\s\S]*?\.join\('\\n'\)/)?.[0] ?? ''
+  assert.match(clipBlock, /App Version/)
+  assert.match(clipBlock, /License ID/)
+  assert.match(clipBlock, /Device ID/)
+  assert.match(clipBlock, /Database Size/)
+  assert.match(clipBlock, /OS/)
+  assert.equal(/password|customer|sales/i.test(clipBlock), false)
+
+  // Language dictionary has English (ltr) + Urdu (rtl)
+  assert.match(dictSrc, /dir:\s*'ltr'/)
+  assert.match(dictSrc, /dir:\s*'rtl'/)
+  assert.match(dictSrc, /Need Help\?/)
+  assert.match(dictSrc, /مدد درکار ہے؟/)
+
+  // Accessible without special permissions (Cashier included) & routed cleanly
+  assert.match(policySrc, /page === 'Help Center'\) return true/)
+  assert.match(routesSrc, /'#help-center': 'Help Center'/)
+
+  // Offline bundled content & Report a Problem opens WhatsApp
+  assert.match(helpPageSrc, /HelpCenterPage/)
+  assert.match(helpPageSrc, /buildWhatsAppSupportUrl/)
+})

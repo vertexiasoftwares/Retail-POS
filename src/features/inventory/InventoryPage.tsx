@@ -789,141 +789,56 @@ function StockAdjustmentPanel({ initialProductId }: { initialProductId?: string 
 }
 
 function ExpiryView({
-  products,
-  onStockAdjustment,
+  products: _products,
+  onStockAdjustment: _onStockAdjustment,
 }: {
   products: ProductRecord[]
   onStockAdjustment: (productId: string) => void
 }) {
-  const [filter, setFilter] = useState<'all' | 'expiring' | 'expired'>('all')
-
-  const items = useMemo(() => {
-    return products.map((p, idx) => {
-      const daysLeft = 45 + ((idx * 37) % 360)
-      const expiryDate = new Date(Date.now() + daysLeft * 86400000)
-      const isExpiring = daysLeft <= 60
-      const isExpired = daysLeft <= 0
-      return {
-        ...p,
-        batchNumber: `BAT-${p.sku.slice(-4)}-${idx + 101}`,
-        expiryDate: expiryDate.toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' }),
-        daysLeft,
-        expiryStatus: isExpired ? 'Expired' : isExpiring ? 'Expiring Soon' : 'Safe',
-      }
-    })
-  }, [products])
-
-  const filtered = items.filter(item => {
-    if (filter === 'expiring') return item.daysLeft <= 60 && item.daysLeft > 0
-    if (filter === 'expired') return item.daysLeft <= 0
-    return true
-  })
-
   return (
     <section className="card inventory-table-card">
       <div className="inventory-table-heading">
         <div>
           <h2>Product Expiry Management</h2>
-          <p>Track perishable items, batches and expiry timelines to avoid stock loss.</p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button
-            type="button"
-            className={filter === 'all' ? 'primary' : ''}
-            onClick={() => setFilter('all')}
-          >
-            All Items
-          </button>
-          <button
-            type="button"
-            className={filter === 'expiring' ? 'primary' : ''}
-            onClick={() => setFilter('expiring')}
-          >
-            Expiring Soon
-          </button>
-          <button
-            type="button"
-            className={filter === 'expired' ? 'primary' : ''}
-            onClick={() => setFilter('expired')}
-          >
-            Expired
-          </button>
+          <p style={{ fontSize: 14, color: '#475569' }}>
+            Track perishable items, batches and expiry timelines once batch tracking is enabled.
+          </p>
         </div>
       </div>
-      <div className="inventory-table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Product</th>
-              <th>Category</th>
-              <th>Batch / Lot</th>
-              <th>Stock</th>
-              <th>Expiry Date</th>
-              <th>Days Left</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((item, index) => (
-              <tr key={item.id}>
-                <td>{index + 1}</td>
-                <td>
-                  <div className="inventory-product">
-                    <PosProductVisual
-                      imageUrl={item.imageDataUrl}
-                      category={item.category}
-                      name={item.name}
-                      kind={item.kind}
-                    />
-                    <span>
-                      <strong>{item.name}</strong>
-                      <small>SKU: {item.sku}</small>
-                    </span>
-                  </div>
-                </td>
-                <td>{item.category}</td>
-                <td>
-                  <span className="font-mono text-xs text-slate-600">{item.batchNumber}</span>
-                </td>
-                <td>
-                  <b>{item.stock}</b> {item.unit}
-                </td>
-                <td>{item.expiryDate}</td>
-                <td>{item.daysLeft} days</td>
-                <td>
-                  <span
-                    className={`catalog-status ${
-                      item.expiryStatus === 'Expired'
-                        ? 'low-stock'
-                        : item.expiryStatus === 'Expiring Soon'
-                        ? 'low-stock'
-                        : 'in-stock'
-                    }`}
-                  >
-                    {item.expiryStatus}
-                  </span>
-                </td>
-                <td>
-                  <button
-                    type="button"
-                    onClick={() => onStockAdjustment(item.id)}
-                    style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: '1px solid #cbd5e1', cursor: 'pointer' }}
-                  >
-                    Adjust
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {!filtered.length && (
-        <div className="inventory-empty" style={{ padding: 32, textAlign: 'center', color: '#64748b' }}>
-          No products match the selected expiry criteria.
+      <div
+        className="inventory-empty"
+        role="status"
+        style={{
+          padding: '48px 24px',
+          textAlign: 'center',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 12,
+        }}
+      >
+        <div
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: 16,
+            background: '#f5f3ff',
+            color: '#5E0CF3',
+            border: '1px solid #ddd6fe',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Icon name="box" size={28} />
         </div>
-      )}
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
+          Batch & expiry tracking is not set up yet
+        </h3>
+        <p style={{ margin: 0, maxWidth: 520, fontSize: 14, lineHeight: 1.6, color: '#334155' }}>
+          Real batch numbers and expiry dates will appear here once lot and expiry tracking is added in a future update.
+        </p>
+      </div>
     </section>
   )
 }

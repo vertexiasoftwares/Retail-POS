@@ -17,7 +17,8 @@ const dateLabel = (value: string) =>
     year: 'numeric',
   })
 import { TopNavHeader } from '../../shared/layout/TopNavHeader'
-import { DateRangeFilter } from '../../shared/ui/DateRangeFilter'
+import { CustomSelect } from '../../shared/ui/CustomSelect'
+import { DateRangeFilter, type DateRange } from '../../shared/ui/DateRangeFilter'
 import { exportToExcel } from '../../shared/utils/exportUtils'
 
 const lineTotalPaisa = (item: PurchaseDraft['items'][number]) =>
@@ -33,7 +34,7 @@ function PurchasesHeader({ onNavigate }: { onNavigate?: (page: string) => void }
   )
 }
 
-function PurchaseStats({ purchases }: { purchases: PurchaseRecord[] }) {
+function PurchaseStats({ purchases, periodLabel = 'All records' }: { purchases: PurchaseRecord[]; periodLabel?: string }) {
   const totalAmount = purchases.reduce((sum, purchase) => sum + purchase.totalAmountRupees, 0)
   const totalPaid = purchases.reduce((sum, purchase) => sum + purchase.paidAmountRupees, 0)
   const outstanding = purchases.reduce((sum, purchase) => sum + purchase.dueAmountRupees, 0)
@@ -41,7 +42,7 @@ function PurchaseStats({ purchases }: { purchases: PurchaseRecord[] }) {
     ['cart', 'Total Purchases', money(totalAmount), 'Live total', 'purple'],
     ['report', 'Total Paid', money(totalPaid), 'Recorded payments', 'green'],
     ['clock', 'Outstanding Amount', money(outstanding), 'Supplier due', 'amber'],
-    ['box', 'Total Purchases', String(purchases.length), 'All records', 'blue'],
+    ['box', 'Total Purchases', String(purchases.length), periodLabel, 'blue'],
   ]
   return (
     <div className="purchase-stats">
@@ -134,27 +135,29 @@ function PurchasesTable({
           value={toDate}
           onChange={event => setToDate(event.target.value)}
         />
-        <select
-          aria-label="Filter purchases by supplier"
+        <CustomSelect
+          ariaLabel="Filter purchases by supplier"
           value={supplier}
-          onChange={event => setSupplier(event.target.value)}
-        >
-          <option value="all">All Suppliers</option>
-          {Array.from(new Set(purchases.map(item => item.supplier))).map(name => (
-            <option key={name}>{name}</option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter purchases by status"
+          onChange={setSupplier}
+          options={[
+            { value: 'all', label: 'All Suppliers' },
+            ...Array.from(new Set(purchases.map(item => item.supplier))).map(name => ({
+              value: name,
+              label: name,
+            })),
+          ]}
+          fullWidth
+        />
+        <CustomSelect
+          ariaLabel="Filter purchases by status"
           value={status}
-          onChange={event => setStatus(event.target.value)}
-        >
-          {['all', 'Paid', 'Partial', 'Unpaid'].map(value => (
-            <option value={value} key={value}>
-              {value === 'all' ? 'All Status' : value}
-            </option>
-          ))}
-        </select>
+          onChange={setStatus}
+          options={['all', 'Paid', 'Partial', 'Unpaid'].map(value => ({
+            value,
+            label: value === 'all' ? 'All Status' : value,
+          }))}
+          fullWidth
+        />
         <button
           className="clear"
           onClick={() => {
@@ -694,6 +697,17 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
   const { purchases, loading, busy, error } = useRetailData()
   const [showForm, setShowForm] = useState(false)
   const [selectedPurchase, setSelectedPurchase] = useState<PurchaseRecord | null>(null)
+  const [dateRange, setDateRange] = useState<DateRange | null>(null)
+
+  const visiblePurchases = useMemo(
+    () =>
+      dateRange
+        ? purchases.filter(
+            p => p.purchaseDate >= dateRange.startDate && p.purchaseDate <= dateRange.endDate
+          )
+        : purchases,
+    [purchases, dateRange]
+  )
 
   useEscapeKey(() => {
     setShowForm(false)
@@ -717,8 +731,18 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
             <p>Manage supplier purchases and stock inward</p>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <DateRangeFilter />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <DateRangeFilter value={dateRange ?? undefined} onChange={setDateRange} />
+          {dateRange && (
+            <button
+              type="button"
+              onClick={() => setDateRange(null)}
+              className="medkit-btn-secondary"
+              style={{ height: 40, padding: '0 14px', fontSize: 14 }}
+            >
+              Show All
+            </button>
+          )}
           <button
             className="new-purchase"
             disabled={loading || busy || Boolean(error)}
@@ -731,16 +755,16 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
         </div>
       </div>
       <RetailDataStatus />
-      <PurchaseStats purchases={purchases} />
+      <PurchaseStats purchases={visiblePurchases} periodLabel={dateRange?.label ?? 'All records'} />
       <div className="purchases-layout">
-        <PurchasesTable purchases={purchases} onViewPurchase={setSelectedPurchase} />
+        <PurchasesTable purchases={visiblePurchases} onViewPurchase={setSelectedPurchase} />
         <aside className="purchases-side">
           <PurchaseQuickActions
             onNew={() => setShowForm(true)}
             onNavigate={onNavigate}
             disabled={loading || busy || Boolean(error)}
           />
-          <RecentPurchasesPanel purchases={purchases} />
+          <RecentPurchasesPanel purchases={visiblePurchases} />
         </aside>
       </div>
       {showForm && <NewPurchaseModal onClose={() => setShowForm(false)} />}

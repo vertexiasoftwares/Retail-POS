@@ -5,5 +5,5 @@ export type CashMoveRequest = { branchId: string; operationId: string; shiftId: 
 export type CashForceCloseRequest = { branchId: string; shiftId: string; reason: string; operationId?: string }
 export type BackupSummary = { token: string; fileName: string; businessName: string; createdAt: string; schemaVersion: number; sizeBytes: number; checksum: string; sales: number; products: number; purchases: number; openShifts: number; sameInstallation: boolean; ownerUsernames: string[] }
 export type BackupRecord = { id: string; fileName: string; path: string; createdAt: string; sizeBytes: number; checksum: string; kind: 'manual' | 'before_restore' | 'automatic' }
-export type BackupStatus = { busy: boolean; directory: string; records: BackupRecord[]; lastAutomaticError: string | null }
+export type BackupStatus = { busy: boolean; directory: string; records: BackupRecord[]; lastAutomaticError: string | null; remoteClient?: boolean; canRestore?: boolean }
 export type BackupRestoreRequest = { token: string; confirmation: string; currentPassword: string; backupOwnerUsername: string; backupOwnerPassword: string; allowDifferentInstallation: boolean }

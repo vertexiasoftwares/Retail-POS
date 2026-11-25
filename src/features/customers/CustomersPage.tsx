@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../../app/auth/useAuth'
-import { notifyRetailDataChanged } from '../../services/retail-events'
+import { notifyRetailDataChanged, triggerRefreshShimmer } from '../../services/retail-events'
 import { accountPaymentMethods, moneyPaisa as money, parseMoney } from '../../shared/account-format'
 import { useDesktopAction, useDesktopQuery } from '../../shared/hooks/useDesktopQuery'
 import { useOperationIdentity } from '../../shared/hooks/useOperationIdentity'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { TopNavHeader } from '../../shared/layout/TopNavHeader'
+import { CustomSelect } from '../../shared/ui/CustomSelect'
 import { exportToExcel } from '../../shared/utils/exportUtils'
 import { Icon } from '../../shared/ui/Icon'
 import type { CustomerQuery, CustomerReceipt } from '../../types/accounts'
@@ -139,11 +140,11 @@ export default function CustomersPage(props: PageProps) {
     setPage(1)
   }
 
-  // Calculated stats matching mockup
+  // Real customer stats from SQLite sales & receipts
   const totalCount = list.data?.customerCount ?? 0
   const outstandingPaisa = list.data?.duePaisa ?? 0
-  const totalSalesEstimated = (list.data?.customers ?? []).reduce((acc, c) => acc + (c.creditSalesPaisa || 0) + (c.collectedPaisa || 0), 0)
-  const totalReceivedEstimated = (list.data?.customers ?? []).reduce((acc, c) => acc + (c.collectedPaisa || 0), 0)
+  const totalSalesEstimated = (list.data?.customers ?? []).reduce((acc, c) => acc + (c.totalPurchasesPaisa ?? (c.creditSalesPaisa + c.collectedPaisa)), 0)
+  const totalReceivedEstimated = (list.data?.customers ?? []).reduce((acc, c) => acc + (c.totalPaidPaisa ?? c.collectedPaisa), 0)
 
   const error = action.error || list.error || detail.error
 
@@ -160,13 +161,16 @@ export default function CustomersPage(props: PageProps) {
             <button
               type="button"
               disabled={action.busy || list.loading}
-              onClick={notifyRetailDataChanged}
+              onClick={() => {
+                triggerRefreshShimmer()
+                notifyRetailDataChanged()
+              }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 6,
                 border: '1px solid #dce4ef',
                 background: '#f8fafc',
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: 600,
                 color: '#475569',
                 cursor: 'pointer',
@@ -329,42 +333,48 @@ export default function CustomersPage(props: PageProps) {
             />
           </div>
 
-          <select
-            className="medkit-select"
+          <CustomSelect
+            ariaLabel="Filter customers by status"
             value={statusFilter}
-            onChange={e => {
-              setStatusFilter(e.target.value)
+            onChange={val => {
+              setStatusFilter(val)
               setPage(1)
             }}
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-            <option value="due">With Debt</option>
-          </select>
+            options={[
+              { value: 'all', label: 'All Status' },
+              { value: 'active', label: 'Active' },
+              { value: 'inactive', label: 'Inactive' },
+              { value: 'due', label: 'With Debt' },
+            ]}
+            minWidth={135}
+          />
 
-          <select
-            className="medkit-select"
+          <CustomSelect
+            ariaLabel="Filter customers by city"
             value={cityFilter}
-            onChange={e => setCityFilter(e.target.value)}
-          >
-            <option value="all">All Cities</option>
-            <option value="Karachi">Karachi</option>
-            <option value="Lahore">Lahore</option>
-            <option value="Islamabad">Islamabad</option>
-            <option value="Rawalpindi">Rawalpindi</option>
-          </select>
+            onChange={setCityFilter}
+            options={[
+              { value: 'all', label: 'All Cities' },
+              { value: 'Karachi', label: 'Karachi' },
+              { value: 'Lahore', label: 'Lahore' },
+              { value: 'Islamabad', label: 'Islamabad' },
+              { value: 'Rawalpindi', label: 'Rawalpindi' },
+            ]}
+            minWidth={130}
+          />
 
-          <select
-            className="medkit-select"
+          <CustomSelect
+            ariaLabel="Filter customers by group"
             value={groupFilter}
-            onChange={e => setGroupFilter(e.target.value)}
-          >
-            <option value="all">All Groups</option>
-            <option value="General">General</option>
-            <option value="VIP">VIP</option>
-            <option value="Wholesale">Wholesale</option>
-          </select>
+            onChange={setGroupFilter}
+            options={[
+              { value: 'all', label: 'All Groups' },
+              { value: 'General', label: 'General' },
+              { value: 'VIP', label: 'VIP' },
+              { value: 'Wholesale', label: 'Wholesale' },
+            ]}
+            minWidth={130}
+          />
 
           <button type="button" onClick={clearFilters} className="medkit-btn-clear">
             Clear
@@ -378,12 +388,12 @@ export default function CustomersPage(props: PageProps) {
                 filename: `customers-report-${new Date().toISOString().slice(0, 10)}.xls`,
                 title: 'Customer Accounts & Receivables Report',
                 subtitle: `Total Customers: ${customers.length}`,
-                headers: ['Customer Name', 'Phone', 'Total Sales (Rs)', 'Collected (Rs)', 'Balance / Due (Rs)', 'Status'],
+                headers: ['Customer Name', 'Phone', 'Total Purchases (Rs)', 'Total Paid (Rs)', 'Balance / Due (Rs)', 'Status'],
                 rows: customers.map(c => [
                   c.name,
                   c.phone || '—',
-                  (c.creditSalesPaisa / 100).toFixed(2),
-                  (c.collectedPaisa / 100).toFixed(2),
+                  ((c.totalPurchasesPaisa ?? (c.creditSalesPaisa + c.collectedPaisa)) / 100).toFixed(2),
+                  ((c.totalPaidPaisa ?? c.collectedPaisa) / 100).toFixed(2),
                   (c.balancePaisa / 100).toFixed(2),
                   c.isActive ? 'Active' : 'Inactive',
                 ]),
@@ -479,9 +489,9 @@ export default function CustomersPage(props: PageProps) {
                         </td>
                         <td className="text-slate-600 font-mono text-xs">{row.phone || '-'}</td>
                         <td className="font-medium text-slate-700">
-                          {money(row.creditSalesPaisa + row.collectedPaisa)}
+                          {money(row.totalPurchasesPaisa ?? (row.creditSalesPaisa + row.collectedPaisa))}
                         </td>
-                        <td className="font-medium text-slate-700">{money(row.collectedPaisa)}</td>
+                        <td className="font-medium text-slate-700">{money(row.totalPaidPaisa ?? row.collectedPaisa)}</td>
                         <td className="font-bold">
                           {isDebt ? (
                             <span className="text-rose-600">{money(row.balancePaisa)}</span>
@@ -489,7 +499,9 @@ export default function CustomersPage(props: PageProps) {
                             <span className="text-emerald-600">Rs. 0</span>
                           )}
                         </td>
-                        <td className="text-slate-500 text-xs">Today</td>
+                        <td className="text-slate-500 text-xs">
+                          {row.lastPurchaseAt ? new Date(row.lastPurchaseAt).toLocaleDateString('en-PK') : 'No purchases'}
+                        </td>
                         <td>
                           <span className={`medkit-status-pill ${row.isActive ? 'active' : 'inactive'}`}>
                             {row.isActive ? 'Active' : 'Inactive'}
@@ -644,19 +656,35 @@ export default function CustomersPage(props: PageProps) {
                   <div className="space-y-2 py-3 border-t border-b border-slate-100 text-xs text-slate-600 mb-4">
                     <div className="flex items-center gap-2">
                       <span className="text-slate-400">📞</span>
-                      <span className="font-mono">{customer.phone || 'No phone'}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-400">📍</span>
-                      <span>Karachi, Pakistan</span>
+                      <span className="font-mono">{customer.phone || 'No phone provided'}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-slate-400">📅</span>
-                      <span>Customer Since: 15 Jan 2026</span>
+                      <span>
+                        Customer Since:{' '}
+                        {customer.createdAt
+                          ? new Date(customer.createdAt).toLocaleDateString('en-PK', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: 'numeric',
+                            })
+                          : '—'}
+                      </span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-slate-400">🏷️</span>
-                      <span>Group: General</span>
+                      <span className="text-slate-400">🧾</span>
+                      <span>
+                        Last Purchase:{' '}
+                        {customer.lastPurchaseAt
+                          ? new Date(customer.lastPurchaseAt).toLocaleString('en-PK', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : 'No purchases yet'}
+                      </span>
                     </div>
                   </div>
 
@@ -665,13 +693,13 @@ export default function CustomersPage(props: PageProps) {
                     <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-center">
                       <div className="text-[10px] text-slate-500 font-medium">Total Purchases</div>
                       <div className="text-xs font-bold text-slate-900 mt-1 font-heading">
-                        {money(customer.balancePaisa + 100000)}
+                        {money(customer.totalPurchasesPaisa ?? (customer.creditSalesPaisa + customer.collectedPaisa))}
                       </div>
                     </div>
                     <div className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-100 text-center">
                       <div className="text-[10px] text-emerald-700 font-medium">Total Paid</div>
                       <div className="text-xs font-bold text-emerald-800 mt-1 font-heading">
-                        {money(100000)}
+                        {money(customer.totalPaidPaisa ?? customer.collectedPaisa)}
                       </div>
                     </div>
                     <div className="p-2.5 rounded-xl bg-rose-50/60 border border-rose-100 text-center">
@@ -740,38 +768,63 @@ export default function CustomersPage(props: PageProps) {
                     </button>
                   </div>
 
-                  {/* History Tab */}
+                  {/* History Tab: Detailed Bills & Items Purchased */}
                   {detailTab === 'history' && (
-                    <div className="space-y-2">
-                      <table className="w-full text-xs text-left">
-                        <thead>
-                          <tr className="text-slate-400 border-b border-slate-100">
-                            <th className="py-1">Date</th>
-                            <th className="py-1">Invoice #</th>
-                            <th className="py-1 text-right">Total</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detail.data?.sales?.slice(0, 5).map(s => (
-                            <tr key={s.id} className="border-b border-slate-50">
-                              <td className="py-2 text-slate-600">
-                                {new Date(s.occurredAt).toLocaleDateString()}
-                              </td>
-                              <td className="py-2 font-mono text-slate-800">{s.number}</td>
-                              <td className="py-2 text-right font-semibold text-slate-900">
-                                {money(s.totalPaisa)}
-                              </td>
-                            </tr>
-                          ))}
-                          {(!detail.data?.sales || detail.data.sales.length === 0) && (
-                            <tr>
-                              <td colSpan={3} className="py-4 text-center text-slate-400">
-                                No purchase invoices found.
-                              </td>
-                            </tr>
+                    <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+                      {detail.data?.sales?.map(s => (
+                        <div key={s.id} className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/60 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-xs font-bold text-[#5E0CF3]">{s.number}</span>
+                                <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 text-[10px] font-semibold text-slate-700">
+                                  {s.paymentMethod}
+                                </span>
+                                {s.status !== 'completed' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9px] font-semibold uppercase">
+                                    {s.status.replace('_', ' ')}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                {new Date(s.occurredAt).toLocaleString('en-PK', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs font-bold text-slate-900">{money(s.totalPaisa)}</div>
+                            </div>
+                          </div>
+
+                          {s.items && s.items.length > 0 && (
+                            <div className="pt-2 border-t border-slate-200/70 space-y-1">
+                              {s.items.map((item, idx) => (
+                                <div key={`${s.id}-item-${idx}`} className="flex items-center justify-between text-[11px] text-slate-700">
+                                  <span className="truncate pr-2">
+                                    <strong className="font-medium text-slate-800">{item.productName}</strong>{' '}
+                                    <span className="text-slate-500">
+                                      × {(item.quantityMilli / 1000).toLocaleString('en-PK', { maximumFractionDigits: 3 })}
+                                    </span>
+                                  </span>
+                                  <span className="font-semibold text-slate-800 whitespace-nowrap">
+                                    {money(item.lineTotalPaisa)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
                           )}
-                        </tbody>
-                      </table>
+                        </div>
+                      ))}
+                      {(!detail.data?.sales || detail.data.sales.length === 0) && (
+                        <div className="py-6 text-center text-xs text-slate-400">
+                          No purchase invoices found for this customer yet.
+                        </div>
+                      )}
                     </div>
                   )}
 
