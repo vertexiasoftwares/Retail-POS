@@ -20,10 +20,13 @@ export type PosSettings = {
   // Inventory & Cash defaults
   defaultMinStock: number
   defaultOpeningCashRupees: number
+  // Custom branding logo inside POS & receipts only (never login/register)
+  customLogoDataUrl: string | null
   // Display & Shimmer
   shimmerDurationSec: number
 }
 
+export const DEFAULT_SYSTEM_LOGO = '/retail-logo-transparent.png'
 const STORAGE_KEY = 'vertexia_pos_settings_v1'
 export const SETTINGS_CHANGED_EVENT = 'vertexia:pos-settings-changed'
 
@@ -42,6 +45,7 @@ export const DEFAULT_POS_SETTINGS: PosSettings = {
   allowLineDiscounts: true,
   defaultMinStock: 5,
   defaultOpeningCashRupees: 0,
+  customLogoDataUrl: null,
   shimmerDurationSec: 3.5,
 }
 
@@ -112,4 +116,9 @@ export function usePosSettings(): PosSettings {
     }
   }, [])
   return settings
+}
+
+export function useSystemLogo(): string {
+  const settings = usePosSettings()
+  return settings.customLogoDataUrl || DEFAULT_SYSTEM_LOGO
 }

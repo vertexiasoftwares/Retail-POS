@@ -450,6 +450,8 @@ export type VertexiaDesktopApi = {
     updateUser(input: import('./auth.js').StaffUpdateInput): Promise<import('./auth.js').StaffUser[]>
     resetPassword(userId: string, password: string): Promise<void>
     changePassword(currentPassword: string, newPassword: string): Promise<import('./auth.js').AuthSession>
+    verifyPassword(password: string): Promise<{ ok: boolean }>
+    updateBusiness(input: import('./auth.js').BusinessUpdateInput): Promise<import('./auth.js').AuthSession>
     onSessionExpired(callback: () => void): () => void
   }
   retail: {

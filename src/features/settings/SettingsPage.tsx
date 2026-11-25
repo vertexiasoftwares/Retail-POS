@@ -1,16 +1,21 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { PageShell, type PageProps } from '../../shared/layout/PageShell'
 import { TopNavHeader } from '../../shared/layout/TopNavHeader'
 import { Icon, type IconName } from '../../shared/ui/Icon'
 import { useAuth } from '../../app/auth/useAuth'
 import { localBusinessDate } from '../../shared/account-format'
+import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import {
+  DEFAULT_POS_SETTINGS,
+  DEFAULT_SYSTEM_LOGO,
+  getPosSettings,
+  resetPosSettings,
   savePosSettings,
   usePosSettings,
   type PosSettings,
 } from '../../shared/settings/posSettings'
 import { exportToExcel, exportToPdf } from '../../shared/utils/exportUtils'
-import { triggerRefreshShimmer } from '../../services/retail-events'
+import { notifyRetailDataChanged, triggerRefreshShimmer } from '../../services/retail-events'
 import type { BackupStatus, BackupSummary } from '../../types/recovery'
 import type { PosPaymentMethod } from '../../types/desktop-api'
 import '../../styles/recovery.css'
@@ -38,8 +43,38 @@ const TABS: { id: SettingsTab; icon: IconName; label: string }[] = [
 
 export default function SettingsPage(props: PageProps) {
   const { session, canPage, acceptSession } = useAuth()
-  const settings = usePosSettings()
+  const savedSettings = usePosSettings()
+  const activeBranch = session?.branches.find(b => b.id === session.branchId)
+
   const [activeTab, setActiveTab] = useState<SettingsTab>('Business')
+
+  // Editable draft settings + editable store/branch name (saved with login password)
+  const [draft, setDraft] = useState<PosSettings>(() => getPosSettings())
+  const [storeName, setStoreName] = useState(() => session?.businessName ?? '')
+  const [branchName, setBranchName] = useState(() => activeBranch?.name ?? '')
+  const [branchCity, setBranchCity] = useState(() => activeBranch?.city || savedSettings.businessCity || '')
+
+  // Keep business fields synced when branch switches externally
+  useEffect(() => {
+    setStoreName(session?.businessName ?? '')
+    setBranchName(activeBranch?.name ?? '')
+    setBranchCity(prev => activeBranch?.city || prev || savedSettings.businessCity || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.businessId, session?.branchId, session?.businessName, activeBranch?.name, activeBranch?.city])
+
+  // Password confirmation dialog for Save / Reset to Default
+  const [authModalMode, setAuthModalMode] = useState<'save' | 'reset' | null>(null)
+  const [confirmPass, setConfirmPass] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState('')
+
+  useEscapeKey(() => {
+    if (!authBusy) {
+      setAuthModalMode(null)
+      setConfirmPass('')
+      setAuthError('')
+    }
+  }, Boolean(authModalMode))
 
   // Change password inside Security tab
   const [pwCurrent, setPwCurrent] = useState('')
@@ -79,13 +114,92 @@ export default function SettingsPage(props: PageProps) {
 
   useEffect(() => {
     if (!notice) return
-    const t = window.setTimeout(() => setNotice(''), 3500)
+    const t = window.setTimeout(() => setNotice(''), 4000)
     return () => window.clearTimeout(t)
   }, [notice])
 
-  const updateSetting = <K extends keyof PosSettings>(key: K, value: PosSettings[K], feedback?: string) => {
-    savePosSettings({ [key]: value })
-    if (feedback) setNotice(feedback)
+  const updateDraft = <K extends keyof PosSettings>(key: K, value: PosSettings[K]) => {
+    setDraft(prev => ({ ...prev, [key]: value }))
+  }
+
+  const handleLogoUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setError('')
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'].includes(file.type)) {
+      setError('Logo must be a PNG, JPG, WebP, or SVG image.')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Logo image must be 2 MB or smaller.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        updateDraft('customLogoDataUrl', reader.result)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const openAuthConfirm = (mode: 'save' | 'reset') => {
+    setError('')
+    setAuthError('')
+    setConfirmPass('')
+    if (mode === 'save' && !storeName.trim()) {
+      setError('Store / Business name cannot be empty.')
+      return
+    }
+    setAuthModalMode(mode)
+  }
+
+  const handleConfirmSettingsAuth = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!authModalMode || authBusy) return
+    setAuthError('')
+    setError('')
+    if (!confirmPass) {
+      setAuthError('Enter your login password.')
+      return
+    }
+    if (!window.vertexia?.auth) {
+      setAuthError('Authentication service unavailable.')
+      return
+    }
+
+    setAuthBusy(true)
+    try {
+      if (authModalMode === 'save') {
+        const updatedSession = await window.vertexia.auth.updateBusiness({
+          businessName: storeName.trim(),
+          branchName: branchName.trim() || undefined,
+          city: branchCity.trim() || undefined,
+          password: confirmPass,
+        })
+        acceptSession(updatedSession)
+        const nextSaved = savePosSettings({
+          ...draft,
+          businessCity: branchCity.trim(),
+        })
+        setDraft(nextSaved)
+        notifyRetailDataChanged()
+        window.dispatchEvent(new Event('vertexia:auth-refresh'))
+        setNotice('Store info and settings saved successfully.')
+      } else {
+        await window.vertexia.auth.verifyPassword(confirmPass)
+        const reset = resetPosSettings()
+        setDraft({ ...DEFAULT_POS_SETTINGS, ...reset })
+        setBranchCity(activeBranch?.city ?? '')
+        setNotice('All receipt, POS, inventory, and branding preferences reset to defaults.')
+      }
+      setAuthModalMode(null)
+      setConfirmPass('')
+    } catch (cause) {
+      setAuthError(cause instanceof Error ? cause.message : 'Password verification failed.')
+    } finally {
+      setAuthBusy(false)
+    }
   }
 
   const run = async (action: () => Promise<void>) => {
@@ -133,46 +247,6 @@ export default function SettingsPage(props: PageProps) {
     } finally {
       setPwBusy(false)
     }
-  }
-
-  const cardStyle: React.CSSProperties = {
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 12,
-    padding: '20px 22px',
-    marginBottom: 16,
-  }
-
-  const labelStyle: React.CSSProperties = {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-    fontSize: 14,
-    fontWeight: 600,
-    color: '#1e293b',
-    marginBottom: 14,
-  }
-
-  const inputStyle: React.CSSProperties = {
-    padding: '10px 12px',
-    borderRadius: 8,
-    border: '1px solid #cbd5e1',
-    fontSize: 14,
-    color: '#0f172a',
-    background: '#ffffff',
-    width: '100%',
-    boxSizing: 'border-box',
-  }
-
-  const checkLabelStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 500,
-    color: '#1e293b',
-    padding: '6px 0',
   }
 
   const runDataExport = async (kind: 'products' | 'customers' | 'suppliers', format: 'xlsx' | 'pdf') => {
@@ -246,7 +320,7 @@ export default function SettingsPage(props: PageProps) {
       const payload = {
         filename: `${kind}-export-${localBusinessDate()}`,
         title,
-        subtitle: `${session.businessName} | ${session.branches.find(b => b.id === branchId)?.name ?? 'Branch'}`,
+        subtitle: `${session.businessName} | ${activeBranch?.name ?? 'Branch'}`,
         headers,
         rows,
       }
@@ -259,8 +333,57 @@ export default function SettingsPage(props: PageProps) {
     }
   }
 
-  const activeBranch = session?.branches.find(b => b.id === session.branchId)
-  const addressPreview = [settings.businessAddress, settings.businessCity].filter(Boolean).join(', ')
+  const cardStyle: React.CSSProperties = {
+    background: '#ffffff',
+    border: '1px solid #e2e8f0',
+    borderRadius: 12,
+    padding: '20px 22px',
+    marginBottom: 16,
+    width: '100%',
+    boxSizing: 'border-box',
+  }
+
+  const labelStyle: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    fontSize: 14,
+    fontWeight: 600,
+    color: '#1e293b',
+    marginBottom: 14,
+  }
+
+  const inputStyle: React.CSSProperties = {
+    padding: '10px 12px',
+    borderRadius: 8,
+    border: '1px solid #cbd5e1',
+    fontSize: 14,
+    color: '#0f172a',
+    background: '#ffffff',
+    width: '100%',
+    boxSizing: 'border-box',
+  }
+
+  const checkLabelStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    cursor: 'pointer',
+    fontSize: 14,
+    fontWeight: 500,
+    color: '#1e293b',
+    padding: '6px 0',
+  }
+
+  const hasUnsavedChanges =
+    JSON.stringify(draft) !== JSON.stringify(savedSettings) ||
+    storeName.trim() !== (session?.businessName ?? '').trim() ||
+    branchName.trim() !== (activeBranch?.name ?? '').trim() ||
+    branchCity.trim() !== (activeBranch?.city || savedSettings.businessCity || '').trim()
+
+  const previewLogo = draft.customLogoDataUrl || DEFAULT_SYSTEM_LOGO
+  const addressPreview = [draft.businessAddress, branchCity].filter(Boolean).join(', ')
+  const isConfigTab = ['Business', 'Receipt', 'POS & Billing', 'Inventory', 'Cash & Shifts'].includes(activeTab)
 
   return (
     <PageShell
@@ -269,7 +392,7 @@ export default function SettingsPage(props: PageProps) {
       header={() => (
         <TopNavHeader
           title="Settings"
-          subtitle="Configure store receipts, POS behavior, security and backups"
+          subtitle="Configure store details, logo, receipts, POS behavior, security and backups"
           onNavigate={props.onNavigate}
           extraRight={
             <button
@@ -295,7 +418,7 @@ export default function SettingsPage(props: PageProps) {
         />
       )}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 110px)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 110px)', width: '100%' }}>
         {/* Horizontal Top Tabs Bar */}
         <nav
           aria-label="Settings sections"
@@ -306,43 +429,107 @@ export default function SettingsPage(props: PageProps) {
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'center',
-            gap: 8,
+            justifyContent: 'space-between',
+            gap: 12,
+            width: '100%',
+            boxSizing: 'border-box',
           }}
         >
-          {TABS.map(tab => {
-            const active = activeTab === tab.id
-            return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            {TABS.map(tab => {
+              const active = activeTab === tab.id
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  aria-current={active ? 'page' : undefined}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 15px',
+                    borderRadius: 10,
+                    border: active ? '1px solid #7c3aed' : '1px solid #e2e8f0',
+                    background: active ? 'linear-gradient(135deg, #7A35F6, #5E0CF3)' : '#f8fafc',
+                    color: active ? '#ffffff' : '#334155',
+                    fontWeight: active ? 700 : 600,
+                    fontSize: 14,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    boxShadow: active ? '0 3px 10px rgba(94, 12, 243, 0.22)' : 'none',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <Icon name={tab.icon} size={17} />
+                  <span>{tab.label}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          {isConfigTab && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {hasUnsavedChanges && (
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: '#92400e',
+                    background: '#fef3c7',
+                    padding: '5px 10px',
+                    borderRadius: 8,
+                    border: '1px solid #fcd34d',
+                  }}
+                >
+                  Unsaved changes
+                </span>
+              )}
               <button
-                key={tab.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id)}
-                aria-current={active ? 'page' : undefined}
+                onClick={() => openAuthConfirm('reset')}
                 style={{
+                  padding: '9px 14px',
+                  borderRadius: 9,
+                  border: '1px solid #cbd5e1',
+                  background: '#ffffff',
+                  color: '#334155',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: 'pointer',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 8,
-                  padding: '9px 15px',
-                  borderRadius: 10,
-                  border: active ? '1px solid #7c3aed' : '1px solid #e2e8f0',
-                  background: active ? 'linear-gradient(135deg, #7A35F6, #5E0CF3)' : '#f8fafc',
-                  color: active ? '#ffffff' : '#334155',
-                  fontWeight: active ? 700 : 600,
-                  fontSize: 14,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  boxShadow: active ? '0 3px 10px rgba(94, 12, 243, 0.22)' : 'none',
-                  transition: 'all 0.15s ease',
+                  gap: 6,
                 }}
               >
-                <Icon name={tab.icon} size={17} />
-                <span>{tab.label}</span>
+                <Icon name="refresh" size={16} /> Reset to Default
               </button>
-            )
-          })}
+              <button
+                type="button"
+                onClick={() => openAuthConfirm('save')}
+                style={{
+                  padding: '9px 18px',
+                  borderRadius: 9,
+                  border: 0,
+                  background: 'linear-gradient(135deg, #7A35F6, #5E0CF3)',
+                  color: '#ffffff',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  boxShadow: '0 3px 10px rgba(94, 12, 243, 0.25)',
+                }}
+              >
+                <Icon name="check" size={16} /> Save Settings
+              </button>
+            </div>
+          )}
         </nav>
 
-        {/* Main Content Area */}
-        <div style={{ flex: 1, padding: '24px 28px', maxWidth: 1220, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+        {/* Full-Width Main Content Area */}
+        <div style={{ flex: 1, padding: '24px 28px', width: '100%', boxSizing: 'border-box' }}>
           {error && (
             <div role="alert" style={{ color: '#991b1b', background: '#fee2e2', border: '1px solid #fecaca', padding: '10px 14px', borderRadius: 8, marginBottom: 16, fontSize: 14, fontWeight: 500 }}>
               {error}
@@ -354,68 +541,154 @@ export default function SettingsPage(props: PageProps) {
             </div>
           )}
 
-          {/* ── Business Info ── */}
+          {/* ── Business Info & System Logo ── */}
           {activeTab === 'Business' && (
             <div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Business Information</h2>
+              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Business Information &amp; Store Branding</h2>
               <p style={{ fontSize: 14, color: '#475569', marginBottom: 20 }}>
-                Shop contact details saved here are automatically printed on your POS receipts and exported reports.
+                Update your store name, contact details, and system/receipt logo. Saving requires your login password.
               </p>
+
               <div style={cardStyle}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
                   <label style={labelStyle}>
-                    Business Name
-                    <input style={{ ...inputStyle, background: '#f8fafc', color: '#475569' }} value={session?.businessName ?? ''} readOnly />
+                    Store / Business Name
+                    <input
+                      style={inputStyle}
+                      value={storeName}
+                      placeholder="e.g. Al-Madina Mart"
+                      maxLength={120}
+                      onChange={e => setStoreName(e.target.value)}
+                    />
                   </label>
                   <label style={labelStyle}>
-                    Active Branch
-                    <input style={{ ...inputStyle, background: '#f8fafc', color: '#475569' }} value={activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Main Branch'} readOnly />
+                    Active Branch Name
+                    <input
+                      style={inputStyle}
+                      value={branchName}
+                      placeholder="Main Branch"
+                      maxLength={120}
+                      onChange={e => setBranchName(e.target.value)}
+                    />
                   </label>
                   <label style={labelStyle}>
                     Shop Phone Number
                     <input
                       style={inputStyle}
-                      value={settings.businessPhone}
+                      value={draft.businessPhone}
                       placeholder="+92 300 1234567"
-                      onChange={e => updateSetting('businessPhone', e.target.value)}
+                      onChange={e => updateDraft('businessPhone', e.target.value)}
                     />
                   </label>
                   <label style={labelStyle}>
                     City / Area
                     <input
                       style={inputStyle}
-                      value={settings.businessCity}
+                      value={branchCity}
                       placeholder="Lahore"
-                      onChange={e => updateSetting('businessCity', e.target.value)}
+                      onChange={e => setBranchCity(e.target.value)}
                     />
                   </label>
                 </div>
+
                 <label style={labelStyle}>
                   Shop Address (shown on receipts)
                   <textarea
+                    rows={2}
                     style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }}
-                    value={settings.businessAddress}
+                    value={draft.businessAddress}
                     placeholder="Shop #1, Main Bazaar, Lahore"
-                    onChange={e => updateSetting('businessAddress', e.target.value)}
+                    onChange={e => updateDraft('businessAddress', e.target.value)}
                   />
                 </label>
+
                 <label style={labelStyle}>
                   NTN / Tax Registration Number
                   <input
                     style={inputStyle}
-                    value={settings.taxNumber}
+                    value={draft.taxNumber}
                     placeholder="Optional — printed on bills if filled"
-                    onChange={e => updateSetting('taxNumber', e.target.value)}
+                    onChange={e => updateDraft('taxNumber', e.target.value)}
                   />
                 </label>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => setNotice('Business details saved and applied to receipts.')}
-                    style={{ padding: '10px 18px', borderRadius: 8, border: 0, background: '#5E0CF3', color: '#ffffff', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 }}
-                  >
-                    <Icon name="check" size={16} /> Save Store Info
-                  </button>
+
+                {/* System & Receipt Logo Uploader */}
+                <div style={{ marginTop: 8, padding: '16px 18px', background: '#f8fafc', borderRadius: 12, border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
+                    System &amp; Receipt Logo
+                  </div>
+                  <p style={{ margin: '0 0 12px', fontSize: 14, color: '#475569' }}>
+                    Applies to Sidebar, Top Navbar, Help Card, and Receipts inside the system. Login &amp; registration screens keep default branding.
+                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
+                    <div
+                      style={{
+                        width: 72,
+                        height: 72,
+                        borderRadius: 12,
+                        background: '#ffffff',
+                        border: '1px solid #cbd5e1',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 8,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <img
+                        src={previewLogo}
+                        alt="System logo preview"
+                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+                      <label
+                        style={{
+                          padding: '9px 16px',
+                          borderRadius: 8,
+                          border: '1px solid #5E0CF3',
+                          background: '#ffffff',
+                          color: '#5E0CF3',
+                          fontSize: 14,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 8,
+                        }}
+                      >
+                        <Icon name="upload" size={16} />
+                        <span>Upload Logo</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                          onChange={handleLogoUpload}
+                          style={{ display: 'none' }}
+                        />
+                      </label>
+                      {draft.customLogoDataUrl && (
+                        <button
+                          type="button"
+                          onClick={() => updateDraft('customLogoDataUrl', null)}
+                          style={{
+                            padding: '9px 14px',
+                            borderRadius: 8,
+                            border: '1px solid #cbd5e1',
+                            background: '#ffffff',
+                            color: '#334155',
+                            fontSize: 14,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Use Default Logo
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 18 }}>
                   {canPage('Branches') && (
                     <button
                       type="button"
@@ -444,22 +717,19 @@ export default function SettingsPage(props: PageProps) {
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Receipt Settings</h2>
               <p style={{ fontSize: 14, color: '#475569', marginBottom: 20 }}>
-                Customize POS bill layout, store details, and footer message. Changes apply immediately to POS receipts.
+                Customize POS bill layout, store details, and footer message. Click <strong>Save Settings</strong> above with your password to apply permanently.
               </p>
               <div style={cardStyle}>
                 <label style={labelStyle}>
                   Receipt Header Tagline
                   <textarea
                     rows={2}
-                    style={{ ...inputStyle, minHeight: 62, resize: 'vertical', lineHeight: 1.5 }}
-                    value={settings.receiptHeader}
+                    style={{ ...inputStyle, minHeight: 64, resize: 'vertical', lineHeight: 1.5 }}
+                    value={draft.receiptHeader}
                     placeholder="e.g. Fresh Grocery & Daily Needs"
-                    onChange={e => updateSetting('receiptHeader', e.target.value)}
+                    onChange={e => updateDraft('receiptHeader', e.target.value)}
                     onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        // Allow normal Enter and Shift+Enter both to add newline cleanly without form submit
-                        e.stopPropagation()
-                      }
+                      if (e.key === 'Enter' && !e.shiftKey) e.stopPropagation()
                     }}
                   />
                   <span style={{ fontSize: 14, fontWeight: 400, color: '#475569' }}>
@@ -470,14 +740,12 @@ export default function SettingsPage(props: PageProps) {
                   Receipt Footer / Thank You Note
                   <textarea
                     rows={3}
-                    style={{ ...inputStyle, minHeight: 78, resize: 'vertical', lineHeight: 1.5 }}
-                    value={settings.receiptFooter}
+                    style={{ ...inputStyle, minHeight: 80, resize: 'vertical', lineHeight: 1.5 }}
+                    value={draft.receiptFooter}
                     placeholder="Thank you for shopping with us."
-                    onChange={e => updateSetting('receiptFooter', e.target.value)}
+                    onChange={e => updateDraft('receiptFooter', e.target.value)}
                     onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.stopPropagation()
-                      }
+                      if (e.key === 'Enter' && !e.shiftKey) e.stopPropagation()
                     }}
                   />
                   <span style={{ fontSize: 14, fontWeight: 400, color: '#475569' }}>
@@ -488,8 +756,8 @@ export default function SettingsPage(props: PageProps) {
                   <label style={checkLabelStyle}>
                     <input
                       type="checkbox"
-                      checked={settings.showLogoOnReceipt}
-                      onChange={e => updateSetting('showLogoOnReceipt', e.target.checked, 'Receipt preference saved.')}
+                      checked={draft.showLogoOnReceipt}
+                      onChange={e => updateDraft('showLogoOnReceipt', e.target.checked)}
                       style={{ width: 17, height: 17 }}
                     />
                     Show store logo on receipt
@@ -497,8 +765,8 @@ export default function SettingsPage(props: PageProps) {
                   <label style={checkLabelStyle}>
                     <input
                       type="checkbox"
-                      checked={settings.showBusinessDetailsOnReceipt}
-                      onChange={e => updateSetting('showBusinessDetailsOnReceipt', e.target.checked, 'Receipt preference saved.')}
+                      checked={draft.showBusinessDetailsOnReceipt}
+                      onChange={e => updateDraft('showBusinessDetailsOnReceipt', e.target.checked)}
                       style={{ width: 17, height: 17 }}
                     />
                     Show phone, address, and NTN on receipt
@@ -506,8 +774,8 @@ export default function SettingsPage(props: PageProps) {
                   <label style={checkLabelStyle}>
                     <input
                       type="checkbox"
-                      checked={settings.showCashierOnReceipt}
-                      onChange={e => updateSetting('showCashierOnReceipt', e.target.checked, 'Receipt preference saved.')}
+                      checked={draft.showCashierOnReceipt}
+                      onChange={e => updateDraft('showCashierOnReceipt', e.target.checked)}
                       style={{ width: 17, height: 17 }}
                     />
                     Show cashier name on receipt
@@ -545,42 +813,42 @@ export default function SettingsPage(props: PageProps) {
                     wordBreak: 'break-word',
                   }}
                 >
-                  {settings.showLogoOnReceipt && (
+                  {draft.showLogoOnReceipt && (
                     <img
-                      src="/retail-logo-transparent.png"
+                      src={previewLogo}
                       alt="Store logo"
-                      style={{ height: 32, width: 'auto', display: 'block', margin: '0 auto 6px' }}
+                      style={{ height: 36, width: 'auto', display: 'block', margin: '0 auto 6px', objectFit: 'contain' }}
                     />
                   )}
                   <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 16, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                    {session?.businessName ?? 'Your Store'}
+                    {storeName.trim() || session?.businessName || 'Your Store'}
                   </div>
                   <div style={{ textAlign: 'center', color: '#475569', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                    {activeBranch?.name ?? 'Main Branch'}
+                    {branchName.trim() || activeBranch?.name || 'Main Branch'}
                   </div>
-                  {settings.showBusinessDetailsOnReceipt && (
+                  {draft.showBusinessDetailsOnReceipt && (
                     <>
                       {addressPreview && <div style={{ textAlign: 'center', color: '#475569', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{addressPreview}</div>}
-                      {settings.businessPhone && <div style={{ textAlign: 'center', color: '#475569', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>Tel: {settings.businessPhone}</div>}
-                      {settings.taxNumber && <div style={{ textAlign: 'center', color: '#475569', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>NTN: {settings.taxNumber}</div>}
+                      {draft.businessPhone && <div style={{ textAlign: 'center', color: '#475569', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>Tel: {draft.businessPhone}</div>}
+                      {draft.taxNumber && <div style={{ textAlign: 'center', color: '#475569', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>NTN: {draft.taxNumber}</div>}
                     </>
                   )}
-                  {settings.receiptHeader && (
+                  {draft.receiptHeader && (
                     <div style={{ textAlign: 'center', fontWeight: 700, marginTop: 4, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                      {settings.receiptHeader}
+                      {draft.receiptHeader}
                     </div>
                   )}
                   <div style={{ borderTop: '1px dashed #cbd5e1', margin: '10px 0' }} />
                   <div>Bill #: BILL-001</div>
                   <div>Date: {localBusinessDate()}</div>
-                  {settings.showCashierOnReceipt && <div>Cashier: {session?.name ?? 'Owner'}</div>}
+                  {draft.showCashierOnReceipt && <div>Cashier: {session?.name ?? 'Owner'}</div>}
                   <div style={{ borderTop: '1px dashed #cbd5e1', margin: '10px 0' }} />
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><span>Basmati Rice 1kg</span><span>Rs 320</span></div>
                   <div style={{ borderTop: '1px dashed #cbd5e1', margin: '10px 0' }} />
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, gap: 8 }}><span>Total</span><span>Rs 320</span></div>
-                  {settings.receiptFooter && (
+                  {draft.receiptFooter && (
                     <div style={{ textAlign: 'center', color: '#475569', marginTop: 10, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                      {settings.receiptFooter}
+                      {draft.receiptFooter}
                     </div>
                   )}
                 </div>
@@ -591,7 +859,7 @@ export default function SettingsPage(props: PageProps) {
           {/* ── POS & Billing ── */}
           {activeTab === 'POS & Billing' && (
             <div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>POS & Billing</h2>
+              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>POS &amp; Billing</h2>
               <p style={{ fontSize: 14, color: '#475569', marginBottom: 20 }}>
                 Control default checkout method and discount rules on the POS screen.
               </p>
@@ -599,15 +867,9 @@ export default function SettingsPage(props: PageProps) {
                 <label style={labelStyle}>
                   Default Payment Method
                   <select
-                    style={{ ...inputStyle, maxWidth: 260 }}
-                    value={settings.defaultPaymentMethod}
-                    onChange={e =>
-                      updateSetting(
-                        'defaultPaymentMethod',
-                        e.target.value as Exclude<PosPaymentMethod, 'Udhaar'>,
-                        `Default payment method set to ${e.target.value}.`
-                      )
-                    }
+                    style={{ ...inputStyle, maxWidth: 280 }}
+                    value={draft.defaultPaymentMethod}
+                    onChange={e => updateDraft('defaultPaymentMethod', e.target.value as Exclude<PosPaymentMethod, 'Udhaar'>)}
                   >
                     <option value="Cash">Cash</option>
                     <option value="Card">Card</option>
@@ -622,8 +884,8 @@ export default function SettingsPage(props: PageProps) {
                 <label style={checkLabelStyle}>
                   <input
                     type="checkbox"
-                    checked={settings.allowLineDiscounts}
-                    onChange={e => updateSetting('allowLineDiscounts', e.target.checked, 'POS discount rule updated.')}
+                    checked={draft.allowLineDiscounts}
+                    onChange={e => updateDraft('allowLineDiscounts', e.target.checked)}
                     style={{ width: 17, height: 17 }}
                   />
                   Allow item &amp; quick cart discounts in POS (for permitted staff)
@@ -646,9 +908,9 @@ export default function SettingsPage(props: PageProps) {
                     <input
                       type="number"
                       style={{ ...inputStyle, width: 140 }}
-                      value={settings.defaultMinStock}
+                      value={draft.defaultMinStock}
                       min={0}
-                      onChange={e => updateSetting('defaultMinStock', Math.max(0, Number(e.target.value) || 0))}
+                      onChange={e => updateDraft('defaultMinStock', Math.max(0, Number(e.target.value) || 0))}
                     />
                     <span style={{ fontSize: 14, fontWeight: 400, color: '#475569' }}>units / kg</span>
                   </div>
@@ -656,24 +918,15 @@ export default function SettingsPage(props: PageProps) {
                     Automatically pre-filled as Minimum Stock when adding a new product in the Products catalog.
                   </span>
                 </label>
-                <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+                {canPage('Inventory') && (
                   <button
                     type="button"
-                    onClick={() => setNotice(`Default low stock level saved (${settings.defaultMinStock}).`)}
-                    style={{ padding: '10px 18px', borderRadius: 8, border: 0, background: '#5E0CF3', color: '#ffffff', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                    onClick={() => props.onNavigate('Inventory')}
+                    style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#ffffff', color: '#1e293b', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
                   >
-                    Save Threshold
+                    Open Inventory
                   </button>
-                  {canPage('Inventory') && (
-                    <button
-                      type="button"
-                      onClick={() => props.onNavigate('Inventory')}
-                      style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#ffffff', color: '#1e293b', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
-                    >
-                      Open Inventory
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
             </div>
           )}
@@ -691,32 +944,23 @@ export default function SettingsPage(props: PageProps) {
                   <input
                     type="number"
                     style={{ ...inputStyle, width: 180 }}
-                    value={settings.defaultOpeningCashRupees}
+                    value={draft.defaultOpeningCashRupees}
                     min={0}
-                    onChange={e => updateSetting('defaultOpeningCashRupees', Math.max(0, Number(e.target.value) || 0))}
+                    onChange={e => updateDraft('defaultOpeningCashRupees', Math.max(0, Number(e.target.value) || 0))}
                   />
                   <span style={{ fontSize: 14, fontWeight: 400, color: '#475569' }}>
                     Automatically pre-fills the Opening Cash input in both POS and Cash &amp; Shifts modals.
                   </span>
                 </label>
-                <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+                {canPage('Cash & Shifts') && (
                   <button
                     type="button"
-                    onClick={() => setNotice(`Default opening cash saved (Rs ${settings.defaultOpeningCashRupees}).`)}
-                    style={{ padding: '10px 18px', borderRadius: 8, border: 0, background: '#5E0CF3', color: '#ffffff', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                    onClick={() => props.onNavigate('Cash & Shifts')}
+                    style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#ffffff', color: '#1e293b', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
                   >
-                    Save Cash Default
+                    Open Cash &amp; Shifts
                   </button>
-                  {canPage('Cash & Shifts') && (
-                    <button
-                      type="button"
-                      onClick={() => props.onNavigate('Cash & Shifts')}
-                      style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#ffffff', color: '#1e293b', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
-                    >
-                      Open Cash &amp; Shifts
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
             </div>
           )}
@@ -1060,6 +1304,138 @@ export default function SettingsPage(props: PageProps) {
           )}
         </div>
       </div>
+
+      {/* Password Confirmation Modal for Save Settings & Reset to Default */}
+      {authModalMode && (
+        <div
+          role="presentation"
+          onMouseDown={e => {
+            if (e.target === e.currentTarget && !authBusy) {
+              setAuthModalMode(null)
+              setConfirmPass('')
+              setAuthError('')
+            }
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            background: 'rgba(15, 23, 42, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={authModalMode === 'save' ? 'Confirm Save Settings' : 'Confirm Reset Settings'}
+            style={{
+              background: '#ffffff',
+              borderRadius: 16,
+              width: 440,
+              maxWidth: '94vw',
+              overflow: 'hidden',
+              boxShadow: '0 24px 60px rgba(15, 23, 42, 0.28)',
+            }}
+          >
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)',
+                padding: '16px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                color: '#ffffff',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Icon name="lock" size={19} />
+                <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#ffffff' }}>
+                  {authModalMode === 'save' ? 'Verify Password to Save Settings' : 'Verify Password to Reset Defaults'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Close password verification"
+                disabled={authBusy}
+                onClick={() => {
+                  setAuthModalMode(null)
+                  setConfirmPass('')
+                  setAuthError('')
+                }}
+                style={{ background: 'transparent', border: 0, color: '#cbd5e1', cursor: 'pointer', padding: 4 }}
+              >
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmSettingsAuth} style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <p style={{ margin: 0, fontSize: 14, color: '#334155', lineHeight: 1.55 }}>
+                {authModalMode === 'save'
+                  ? `Enter the login password for "${session?.username ?? 'owner'}" to save store details and settings.`
+                  : `Enter the login password for "${session?.username ?? 'owner'}" to reset all receipt, POS, inventory, and branding preferences to defaults.`}
+              </p>
+
+              {authError && (
+                <div role="alert" style={{ padding: '9px 12px', borderRadius: 8, background: '#fee2e2', color: '#991b1b', fontSize: 14, fontWeight: 500 }}>
+                  {authError}
+                </div>
+              )}
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 14, fontWeight: 600, color: '#1e293b' }}>
+                Login Password
+                <input
+                  autoFocus
+                  type="password"
+                  required
+                  autoComplete="current-password"
+                  value={confirmPass}
+                  onChange={e => setConfirmPass(e.target.value)}
+                  placeholder="Enter your login password"
+                  style={inputStyle}
+                />
+              </label>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
+                <button
+                  type="button"
+                  disabled={authBusy}
+                  onClick={() => {
+                    setAuthModalMode(null)
+                    setConfirmPass('')
+                    setAuthError('')
+                  }}
+                  style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#ffffff', color: '#334155', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={authBusy}
+                  style={{
+                    padding: '9px 18px',
+                    borderRadius: 8,
+                    border: 0,
+                    background: authModalMode === 'reset' ? '#dc2626' : '#5E0CF3',
+                    color: '#ffffff',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {authBusy
+                    ? 'Verifying…'
+                    : authModalMode === 'save'
+                      ? 'Verify & Save'
+                      : 'Verify & Reset'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </PageShell>
   )
 }

@@ -210,15 +210,15 @@ function BreakdownDonut({
             <p className="text-sm text-slate-700 m-0">{emptyMessage}</p>
           </div>
         ) : (
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-5">
+          <div className="flex flex-wrap items-center gap-5 w-full min-w-0">
             <div className="relative w-32 h-32 flex-shrink-0">
-              <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+              <svg className="w-full h-full transform -rotate-90 overflow-visible" viewBox="0 0 42 42">
                 <circle
                   className="text-slate-100"
-                  cx="18"
-                  cy="18"
+                  cx="21"
+                  cy="21"
                   r="15.9155"
-                  strokeWidth="5"
+                  strokeWidth="4.6"
                   stroke="currentColor"
                   fill="none"
                 />
@@ -231,10 +231,10 @@ function BreakdownDonut({
                     return (
                       <circle
                         key={seg.label}
-                        cx="18"
-                        cy="18"
+                        cx="21"
+                        cy="21"
                         r="15.9155"
-                        strokeWidth="5"
+                        strokeWidth="4.6"
                         stroke={CHART_COLORS[idx % CHART_COLORS.length]}
                         strokeDasharray={`${pct} ${Math.max(0, 100 - pct)}`}
                         strokeDashoffset={dashOffset}
@@ -244,20 +244,20 @@ function BreakdownDonut({
                   })
                 })()}
               </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-2">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-3">
                 <span className="text-sm font-bold text-slate-900 font-heading leading-tight">
                   {money(totalPaisa)}
                 </span>
-                <span className="text-xs text-slate-600">{centerLabel}</span>
+                <span className="text-sm text-slate-600 leading-tight">{centerLabel}</span>
               </div>
             </div>
 
-            <div className="flex-1 space-y-2 text-sm min-w-0">
+            <div className="flex-1 space-y-2 text-sm min-w-[180px]">
               {positive.map((seg, idx) => {
                 const pct = Math.round((seg.amountPaisa / positiveSum) * 100)
                 return (
-                  <div key={seg.label} className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2 text-slate-700 truncate">
+                  <div key={seg.label} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <span className="flex items-center gap-2 text-slate-700 min-w-0">
                       <span
                         className="w-2.5 h-2.5 rounded-full shrink-0"
                         style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }}

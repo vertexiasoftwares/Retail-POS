@@ -4,6 +4,7 @@ import type { AuthRepository } from '../../electron/database/auth.mjs';
 import type { RealtimeSyncServer } from '../websocket.mjs';
 import type {
   BusinessSetupInput,
+  BusinessUpdateInput,
   StaffCreateInput,
   StaffUpdateInput,
 } from '../../src/types/auth.js';
@@ -258,6 +259,46 @@ export function registerAuthRoutes(
       };
     } catch (err: any) {
       return reply.status(400).send({ error: 'ChangePasswordError', message: err?.message || 'Failed to change password.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/auth/verify-password
+  app.post('/api/auth/verify-password', async (request, reply) => {
+    const guarded = enforceAuth(request, reply, auth, db, 'settings.manage', undefined, true);
+    if (!guarded) return;
+    const body = request.body as { password?: string } | undefined;
+    try {
+      return await auth.verifyCurrentPassword(body?.password ?? '', guarded.token);
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'VerifyPasswordError', message: err?.message || 'Incorrect login password.', statusCode: 400 });
+    }
+  });
+
+  // POST /api/auth/update-business
+  app.post('/api/auth/update-business', async (request, reply) => {
+    const guarded = enforceAuth(request, reply, auth, db, 'settings.manage', undefined, true);
+    if (!guarded) return;
+    const body = request.body as BusinessUpdateInput | undefined;
+    try {
+      const session = await auth.updateBusinessProfile(body!, guarded.token);
+      return {
+        ok: true,
+        session: {
+          userId: session.userId,
+          name: session.name,
+          username: session.username,
+          role: session.role,
+          businessId: session.businessId,
+          businessName: session.businessName,
+          branches: session.branches,
+          branchId: session.branchId,
+          permissions: session.permissions,
+          allowedTabs: session.allowedTabs,
+          mustChangePassword: session.mustChangePassword,
+        },
+      };
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'UpdateBusinessError', message: err?.message || 'Failed to update store details.', statusCode: 400 });
     }
   });
 }

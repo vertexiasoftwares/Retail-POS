@@ -495,6 +495,57 @@ export class AuthRepository {
             return this.start(session.userId);
         });
     }
+    verifyCurrentPassword(secret, token) {
+        return this.serial(async () => {
+            const effectiveToken = token || getRequestContext()?.sessionToken;
+            const session = this.require('settings.manage', undefined, false, true, effectiveToken);
+            const row = this.db.prepare('SELECT password_hash,locked_until,failed_attempts FROM user_credentials WHERE user_id=?').get(session.userId);
+            if (row.locked_until && Date.parse(String(row.locked_until)) > this.now().getTime())
+                throw new Error('Too many attempts. Try again in 15 minutes.');
+            if (!await verifyPassword(password(secret), String(row.password_hash))) {
+                const count = Number(row.failed_attempts) + 1;
+                this.db.prepare('UPDATE user_credentials SET failed_attempts=?,locked_until=? WHERE user_id=?').run(count >= 5 ? 0 : count, count >= 5 ? new Date(this.now().getTime() + 15 * 60 * 1000).toISOString() : null, session.userId);
+                throw new Error('Incorrect login password.');
+            }
+            this.db.prepare('UPDATE user_credentials SET failed_attempts=0,locked_until=NULL WHERE user_id=?').run(session.userId);
+            return { ok: true };
+        });
+    }
+    updateBusinessProfile(input, token) {
+        return this.serial(async () => {
+            const effectiveToken = token || getRequestContext()?.sessionToken;
+            const session = this.require('settings.manage', undefined, false, true, effectiveToken);
+            const original = effectiveToken ? this.sessions.get(this.hashToken(effectiveToken)) : this.desktopSession;
+            const businessName = text(input?.businessName, 'store name', 120);
+            const branchName = typeof input?.branchName === 'string' && input.branchName.trim() ? text(input.branchName, 'branch name', 120) : undefined;
+            const city = typeof input?.city === 'string' && input.city.trim() ? text(input.city, 'city', 80) : undefined;
+            const row = this.db.prepare('SELECT password_hash,locked_until,failed_attempts FROM user_credentials WHERE user_id=?').get(session.userId);
+            if (row.locked_until && Date.parse(String(row.locked_until)) > this.now().getTime())
+                throw new Error('Too many attempts. Try again in 15 minutes.');
+            if (!await verifyPassword(password(input?.password), String(row.password_hash))) {
+                const count = Number(row.failed_attempts) + 1;
+                this.db.prepare('UPDATE user_credentials SET failed_attempts=?,locked_until=? WHERE user_id=?').run(count >= 5 ? 0 : count, count >= 5 ? new Date(this.now().getTime() + 15 * 60 * 1000).toISOString() : null, session.userId);
+                throw new Error('Incorrect login password.');
+            }
+            this.unchangedSession(original, effectiveToken);
+            this.require('settings.manage', undefined, false, true, effectiveToken);
+            this.transaction(() => {
+                this.db.prepare('UPDATE user_credentials SET failed_attempts=0,locked_until=NULL WHERE user_id=?').run(session.userId);
+                this.db.prepare('UPDATE businesses SET name=? WHERE id=?').run(businessName, session.businessId);
+                if (branchName || city) {
+                    this.db.prepare('UPDATE branches SET name=COALESCE(?, name), city=COALESCE(?, city) WHERE id=? AND business_id=?').run(branchName ?? null, city ?? null, session.branchId, session.businessId);
+                }
+                this.audit(session.userId, session.branchId, 'Business settings updated', businessName);
+            });
+            if (effectiveToken) {
+                return this.authenticateToken(effectiveToken, false);
+            }
+            const next = this.start(session.userId);
+            if (this.desktopSession)
+                this.desktopSession.branchId = session.branchId;
+            return this.current() ?? next;
+        });
+    }
     getActiveSessionCount() {
         return this.sessions.size + (this.desktopSession ? 1 : 0);
     }

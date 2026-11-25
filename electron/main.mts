@@ -19,7 +19,7 @@ import type { CustomerCollectRequest, CustomerCreateRequest, CustomerQuery, Cust
 import type { BackupRestoreRequest, CashCloseRequest, CashForceCloseRequest, CashMoveRequest } from '../src/types/recovery.js'
 import { authorizeIpc, scopeOperation, licenseBranches } from './ipc-policy.mjs'
 import { requiresTransactionLicense } from './licensing/policy.mjs'
-import type { BusinessSetupInput, StaffCreateInput, StaffUpdateInput } from '../src/types/auth.js'
+import type { BusinessSetupInput, BusinessUpdateInput, StaffCreateInput, StaffUpdateInput } from '../src/types/auth.js'
 import type { PurchaseReceiveRequest, StockAdjustmentRequest, SupplierPayRequest } from '../src/types/desktop-api.js'
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
@@ -206,6 +206,8 @@ function registerIpc() {
   handle('auth:update-user', (_event, input) => auth!.updateUser(input as StaffUpdateInput))
   handle('auth:reset-password', (_event, userId, password) => auth!.resetPassword(requiredId(userId), password as string))
   handle('auth:change-password', (_event, current, next) => auth!.changePassword(current as string, next as string))
+  handle('auth:verify-password', (_event, secret) => auth!.verifyCurrentPassword(secret as string))
+  handle('auth:update-business', (_event, input) => auth!.updateBusinessProfile(input as BusinessUpdateInput))
   handle('retail:get-snapshot', (_event, branchId: unknown) => database!.retail.getSnapshot(requiredId(branchId)))
   handle('retail:adjust-stock', (_event, request: unknown) => database!.retail.adjustStock(request as StockAdjustmentRequest))
   handle('retail:receive-purchase', (_event, request: unknown) => database!.retail.receivePurchase(request as PurchaseReceiveRequest))

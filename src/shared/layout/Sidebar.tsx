@@ -9,6 +9,7 @@ import {
   SUPPORT_CONFIG,
 } from '../config/supportConfig'
 import { useHelpTranslation } from '../i18n/helpDictionary'
+import { useSystemLogo } from '../settings/posSettings'
 import type { SupportInfo } from '../../types/desktop-api'
 
 type NavItem = {
@@ -74,6 +75,7 @@ export function Sidebar({
 }: SidebarProps) {
   const { session, canPage } = useAuth()
   const { t } = useHelpTranslation()
+  const systemLogo = useSystemLogo()
   const [internalHover, setInternalHover] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [supportInfo, setSupportInfo] = useState<SupportInfo | null>(null)
@@ -173,7 +175,7 @@ export function Sidebar({
           {/* Logo with NO background box */}
           <div className="flex-shrink-0 w-9 h-9 flex items-center justify-center">
             <img
-              src="/retail-logo-transparent.png"
+              src={systemLogo}
               alt="Vertexia logo"
               className="w-full h-full object-contain"
             />
@@ -387,7 +389,7 @@ export function Sidebar({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <img
-                src="/retail-logo-transparent.png"
+                src={systemLogo}
                 alt={SUPPORT_CONFIG.companyName}
                 style={{ width: 38, height: 38, objectFit: 'contain', flexShrink: 0 }}
               />

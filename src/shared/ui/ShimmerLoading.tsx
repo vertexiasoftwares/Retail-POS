@@ -24,8 +24,8 @@ export function ShimmerLoading({
         className={fullScreen ? 'shimmer-loading-screen' : 'shimmer-loading-inline'}
         style={{ background: '#ffffff' }}
       >
-        <div className="shimmer-loading-inner">
-          <TextShimmer duration={1}>Loading...</TextShimmer>
+        <div className="shimmer-loading-inner" style={{ maxWidth: '100%' }}>
+          <TextShimmer duration={1.4}>LOADING</TextShimmer>
           {children}
         </div>
       </main>

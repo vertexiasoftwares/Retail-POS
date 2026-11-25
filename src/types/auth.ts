@@ -4,6 +4,7 @@ export type AuthBranch = { id: string; name: string; code: string; city: string 
 export type AuthSession = { userId: string; name: string; username: string; role: UserRole; businessId: string; businessName: string; branches: AuthBranch[]; branchId: string; permissions: Permission[]; mustChangePassword: boolean; allowedTabs?: string[]; sessionToken?: string }
 export type AuthStatus = { needsSetup: boolean; businessName: string; session: AuthSession | null; notice?: string }
 export type BusinessSetupInput = { businessName: string; branchName: string; city: string; ownerName: string; username: string; password: string; force?: boolean }
+export type BusinessUpdateInput = { businessName: string; branchName?: string; city?: string; password: string }
 export type StaffUser = { id: string; name: string; username: string | null; role: string; isActive: boolean; hasLogin: boolean; branchIds: string[]; mustChangePassword: boolean; allowedTabs?: string[] }
 export type StaffCreateInput = { name: string; username: string; password: string; role: UserRole; branchIds: string[]; allowedTabs?: string[] }
 export type StaffUpdateInput = { userId: string; role: UserRole; isActive: boolean; branchIds: string[]; allowedTabs?: string[] }

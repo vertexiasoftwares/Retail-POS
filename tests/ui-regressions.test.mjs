@@ -159,20 +159,31 @@ test('My Account is removed, Sidebar shows Settings and Help without Sign out, S
 
   assert.match(appSrc, /PageTransitionShimmer/)
   assert.equal(appSrc.includes('key={pageKey}'), false)
-  assert.match(shimmerSrc, /fontSize:\s*'36px'/)
+  assert.match(shimmerSrc, /fontSize:\s*'clamp\(58px, 11vw, 132px\)'/)
+  assert.match(shimmerSrc, /children = 'LOADING'/)
 })
 
-test('Settings tabs are horizontal on top, Display tab removed, Receipt wraps text with Shift+Enter, and TopNavHeader matches Sidebar logo', () => {
+test('Settings is full-width with password-protected Save/Reset, custom system logo only inside POS, unclipped Reports donut, and real support number', () => {
   const settingsSrc = readRepoFile('src/features/settings/SettingsPage.tsx')
   const headerSrc = readRepoFile('src/shared/layout/TopNavHeader.tsx')
   const posDialogsSrc = readRepoFile('src/features/pos/PosDialogs.tsx')
   const posCssSrc = readRepoFile('src/features/pos/pos.css')
+  const reportsSrc = readRepoFile('src/features/reports/ReportsPage.tsx')
+  const loginSrc = readRepoFile('src/app/auth/LoginPage.tsx')
+  const registerSrc = readRepoFile('src/app/auth/RegisterPage.tsx')
 
-  // Top horizontal tab bar & no Display tab
+  // Full width layout (no 1220 cap) + horizontal top tabs + no Display tab
+  assert.equal(settingsSrc.includes('maxWidth: 1220'), false)
   assert.equal(settingsSrc.includes("'Display'"), false)
   assert.equal(settingsSrc.includes('Display &amp; App'), false)
   assert.match(settingsSrc, /flexDirection:\s*'column'/)
   assert.match(settingsSrc, /flexWrap:\s*'wrap'/)
+
+  // Password-protected Save Settings & Reset to Default + editable Store/Branch name + Custom Logo
+  assert.match(settingsSrc, /window\.vertexia\.auth\.updateBusiness/)
+  assert.match(settingsSrc, /window\.vertexia\.auth\.verifyPassword/)
+  assert.match(settingsSrc, /Store \/ Business Name/)
+  assert.match(settingsSrc, /customLogoDataUrl/)
 
   // Receipt textarea + Shift+Enter hint + overflow protection
   assert.match(settingsSrc, /Shift \+ Enter/)
@@ -181,13 +192,20 @@ test('Settings tabs are horizontal on top, Display tab removed, Receipt wraps te
   assert.match(posCssSrc, /overflow-wrap:\s*anywhere/)
   assert.match(posCssSrc, /white-space:\s*pre-wrap/)
 
-  // Navbar and receipt logos match sidebar logo
-  assert.match(headerSrc, /src="\/retail-logo-transparent\.png"/)
+  // System logo applies inside POS (Navbar, Sidebar, Receipt, Help), NEVER on Login/Register
+  assert.match(headerSrc, /useSystemLogo\(\)/)
   assert.equal(headerSrc.includes('Retail_POS_Logo-removebg-preview.png'), false)
-  assert.match(posDialogsSrc, /src="\/retail-logo-transparent\.png"/)
+  assert.match(posDialogsSrc, /useSystemLogo\(\)/)
+  assert.equal(loginSrc.includes('useSystemLogo'), false)
+  assert.equal(registerSrc.includes('useSystemLogo'), false)
+
+  // Reports Sales by Category donut viewBox padded to avoid clipping
+  assert.match(reportsSrc, /viewBox="0 0 42 42"/)
+  assert.match(reportsSrc, /cx="21"/)
+  assert.match(reportsSrc, /cy="21"/)
 })
 
-test('Help Card & Help Center use single support config, proper WhatsApp URL encoding, safe clipboard fields, offline bundle, and Cashier access', () => {
+test('Help Card & Help Center use single support config with 92 317 2981931, proper WhatsApp URL encoding, safe clipboard fields, offline bundle, and Cashier access', () => {
   const configSrc = readRepoFile('src/shared/config/supportConfig.ts')
   const dictSrc = readRepoFile('src/shared/i18n/helpDictionary.ts')
   const sidebarSrc = readRepoFile('src/shared/layout/Sidebar.tsx')
@@ -196,10 +214,11 @@ test('Help Card & Help Center use single support config, proper WhatsApp URL enc
   const routesSrc = readRepoFile('src/app/routes.ts')
 
   // Single config file holds phone/WhatsApp/hours — components reference SUPPORT_CONFIG, never hardcoded numbers
-  assert.match(configSrc, /supportNumber:\s*'\+92 3XX XXXXXXX'/)
+  assert.match(configSrc, /supportNumber:\s*'\+92 317 2981931'/)
+  assert.match(configSrc, /whatsappNumber:\s*'\+92 317 2981931'/)
   assert.match(configSrc, /Mon to Sat, 10:00 AM to 8:00 PM/)
-  assert.equal(sidebarSrc.includes('+92 3XX XXXXXXX'), false)
-  assert.equal(helpPageSrc.includes('+92 3XX XXXXXXX'), false)
+  assert.equal(sidebarSrc.includes('+92 317 2981931'), false)
+  assert.equal(helpPageSrc.includes('+92 317 2981931'), false)
   assert.match(sidebarSrc, /SUPPORT_CONFIG/)
   assert.match(helpPageSrc, /SUPPORT_CONFIG/)
 

@@ -3,6 +3,7 @@ import { BusinessName, BranchName } from './SessionIdentity'
 import { OwnerDropdown } from './OwnerDropdown'
 import { NotificationCenter } from './NotificationCenter'
 import { Icon } from '../ui/Icon'
+import { useSystemLogo } from '../settings/posSettings'
 
 export type TopNavHeaderProps = {
   title?: string
@@ -21,13 +22,14 @@ export function TopNavHeader({
   extraRight,
   className = '',
 }: TopNavHeaderProps) {
+  const systemLogo = useSystemLogo()
   return (
     <header className={`topbar ${className}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 22px', height: '64px', background: '#ffffff', borderBottom: '1px solid #e2e8f0' }}>
       {/* Left: Clean Store Title / Branding (No 3-line menu, No global search) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <img
-            src="/retail-logo-transparent.png"
+            src={systemLogo}
             alt="Vertexia Retail POS"
             style={{
               height: '38px',

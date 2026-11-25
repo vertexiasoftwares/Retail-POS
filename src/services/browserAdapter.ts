@@ -170,6 +170,11 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
         const res = await apiClient.post<{ ok: boolean; session: any }>('/auth/change-password', { currentPassword, newPassword });
         return res.session;
       },
+      verifyPassword: async (password: string) => apiClient.post<{ ok: boolean }>('/auth/verify-password', { password }),
+      updateBusiness: async (input: any) => {
+        const res = await apiClient.post<{ ok: boolean; session: any }>('/auth/update-business', input);
+        return res.session;
+      },
       onSessionExpired: (callback: () => void) => {
         const listener = () => callback();
         window.addEventListener('vertexia:session-expired', listener);

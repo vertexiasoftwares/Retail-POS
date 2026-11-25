@@ -9,12 +9,12 @@ export type TextShimmerProps = {
 }
 
 /**
- * Pure CSS TextShimmer — large, crisp, centered shimmering text ("Loading...")
+ * Pure CSS TextShimmer — extra-large, bold shimmering "LOADING" text like a display splash screen.
  */
 export function TextShimmer({
-  duration = 1,
-  className = 'font-mono',
-  children = 'Loading...',
+  duration = 1.4,
+  className = '',
+  children = 'LOADING',
 }: TextShimmerProps) {
   return (
     <>
@@ -22,28 +22,29 @@ export function TextShimmer({
         className={`vtx-text-shimmer ${className}`}
         style={{
           display: 'inline-block',
-          fontFamily:
-            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-          fontSize: '36px',
-          lineHeight: 1.2,
-          fontWeight: 700,
-          letterSpacing: '0.02em',
+          fontFamily: 'var(--font-heading, "Plus Jakarta Sans", "Inter", system-ui, -apple-system, sans-serif)',
+          fontSize: 'clamp(58px, 11vw, 132px)',
+          lineHeight: 1.05,
+          fontWeight: 900,
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+          userSelect: 'none',
           backgroundImage:
-            'linear-gradient(90deg, #94a3b8 0%, #64748b 30%, #5e0cf3 48%, #0f172a 52%, #64748b 70%, #94a3b8 100%)',
-          backgroundSize: '250% 100%',
+            'linear-gradient(100deg, #cbd5e1 0%, #94a3b8 28%, #1e293b 44%, #5e0cf3 50%, #1e293b 56%, #94a3b8 72%, #cbd5e1 100%)',
+          backgroundSize: '240% 100%',
           WebkitBackgroundClip: 'text',
           backgroundClip: 'text',
           color: 'transparent',
           WebkitTextFillColor: 'transparent',
-          animation: `vtx-text-shimmer-sweep ${Math.max(duration, 0.5)}s linear infinite`,
+          animation: `vtx-text-shimmer-sweep ${Math.max(duration, 0.8)}s linear infinite`,
         }}
       >
         {children}
       </span>
       <style>{`
         @keyframes vtx-text-shimmer-sweep {
-          0% { background-position: 200% center; }
-          100% { background-position: -50% center; }
+          0% { background-position: 180% center; }
+          100% { background-position: -60% center; }
         }
       `}</style>
     </>
@@ -51,13 +52,13 @@ export function TextShimmer({
 }
 
 /**
- * PageTransitionShimmer — Shows "Loading..." TextShimmer for 3-4 seconds ONLY on
+ * PageTransitionShimmer — Shows large bold "LOADING" TextShimmer for 3-4 seconds ONLY on
  * initial browser load/reload and when Refresh buttons are clicked (NOT on tab switches).
  */
 export function PageTransitionShimmer({
   children,
   duration,
-  text = 'Loading...',
+  text = 'LOADING',
 }: {
   children: React.ReactNode
   duration?: number
@@ -132,7 +133,7 @@ export function PageTransitionShimmer({
             transition: 'opacity 0.55s ease',
           }}
         >
-          <TextShimmer duration={1}>{text}</TextShimmer>
+          <TextShimmer duration={1.4}>{text}</TextShimmer>
         </div>
       )}
       <div

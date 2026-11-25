@@ -36,7 +36,7 @@ function AuthenticatedApp() {
   const props = { onNavigate: navigate }
   return (
     <RetailDataProvider key={session!.userId + ':' + session!.branchId}>
-      <PageTransitionShimmer text="Loading...">
+      <PageTransitionShimmer text="LOADING">
         <ActivePage {...props} />
       </PageTransitionShimmer>
     </RetailDataProvider>

@@ -235,5 +235,40 @@ test('Vertexia Central Server Foundation', async (t) => {
     assert.ok(typeof info.deviceId === 'string' && info.deviceId.length > 0)
     assert.equal('password' in info, false)
     assert.equal('sales' in info, false)
+
+    // Cashier cannot update business name or verify settings password
+    const cashierUpdate = await fetch(`${baseUrl}/api/auth/update-business`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cashierCookie },
+      body: JSON.stringify({ businessName: 'Hijacked', password: 'CashierPass!456' }),
+    })
+    assert.equal(cashierUpdate.status, 403)
+
+    // Wrong password rejected for Owner
+    const badPassUpdate = await fetch(`${baseUrl}/api/auth/update-business`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ businessName: 'New Mart', password: 'WrongPassword!' }),
+    })
+    assert.equal(badPassUpdate.status, 400)
+
+    // Valid password updates store & branch name and verifies password
+    const okVerify = await fetch(`${baseUrl}/api/auth/verify-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ password: 'StrongPassword!123' }),
+    })
+    assert.equal(okVerify.status, 200)
+
+    const okUpdate = await fetch(`${baseUrl}/api/auth/update-business`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ businessName: 'Karachi Super Store', branchName: 'Gulshan Branch', city: 'Karachi', password: 'StrongPassword!123' }),
+    })
+    assert.equal(okUpdate.status, 200)
+    const updatedBody = await okUpdate.json()
+    assert.equal(updatedBody.session.businessName, 'Karachi Super Store')
+    assert.equal(updatedBody.session.branches[0].name, 'Gulshan Branch')
+    assert.equal(updatedBody.session.branches[0].city, 'Karachi')
   })
 })

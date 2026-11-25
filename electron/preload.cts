@@ -69,6 +69,8 @@ const api: VertexiaDesktopApi = {
     updateUser: input => ipcRenderer.invoke('auth:update-user', input),
     resetPassword: (userId, password) => ipcRenderer.invoke('auth:reset-password', userId, password),
     changePassword: (currentPassword, newPassword) => ipcRenderer.invoke('auth:change-password', currentPassword, newPassword),
+    verifyPassword: (password) => ipcRenderer.invoke('auth:verify-password', password),
+    updateBusiness: (input) => ipcRenderer.invoke('auth:update-business', input),
     onSessionExpired: callback => {
       const listener = () => callback()
       ipcRenderer.on('auth:session-expired', listener)

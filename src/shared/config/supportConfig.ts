@@ -4,8 +4,8 @@
  */
 export const SUPPORT_CONFIG = {
   companyName: 'Vertexia Retail POS',
-  supportNumber: '+92 3XX XXXXXXX',
-  whatsappNumber: '+92 3XX XXXXXXX',
+  supportNumber: '+92 317 2981931',
+  whatsappNumber: '+92 317 2981931',
   supportHours: 'Mon to Sat, 10:00 AM to 8:00 PM',
   fallbackVersion: '1.0.0',
 } as const

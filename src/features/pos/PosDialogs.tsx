@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useEscapeKey } from '../../shared/hooks/useEscapeKey'
 import { Icon } from '../../shared/ui/Icon'
-import { getPosSettings, usePosSettings } from '../../shared/settings/posSettings'
+import { getPosSettings, usePosSettings, useSystemLogo } from '../../shared/settings/posSettings'
 import type { PosController } from './usePos'
 import { formatPosMoney as money } from './pos-format'
 
@@ -320,6 +320,7 @@ export function PosDialogs({ dialog, pos, onClose }: { dialog: PosDialogName; po
  */
 export function ReceiptDialog({ pos }: { pos: PosController }) {
   const settings = usePosSettings()
+  const systemLogo = useSystemLogo()
   const preview = pos.billPreview
   useEscapeKey(() => pos.closeBillPreview(), Boolean(preview))
   if (!preview) return null
@@ -349,7 +350,7 @@ export function ReceiptDialog({ pos }: { pos: PosController }) {
           <div className="receipt-brand">
             {settings.showLogoOnReceipt && (
               <img
-                src="/retail-logo-transparent.png"
+                src={systemLogo}
                 alt={pos.data?.businessName || 'Store logo'}
                 style={{ height: 34, width: 'auto', objectFit: 'contain', margin: '0 auto 6px', display: 'block' }}
               />
