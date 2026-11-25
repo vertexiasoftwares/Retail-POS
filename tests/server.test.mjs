@@ -270,5 +270,52 @@ test('Vertexia Central Server Foundation', async (t) => {
     assert.equal(updatedBody.session.businessName, 'Karachi Super Store')
     assert.equal(updatedBody.session.branches[0].name, 'Gulshan Branch')
     assert.equal(updatedBody.session.branches[0].city, 'Karachi')
+
+    // Create two suppliers, then verify Cashier gets 403 on /api/retail/delete-supplier and Owner can delete/deactivate
+    const createCleanRes = await fetch(`${baseUrl}/api/retail/create-supplier`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ branchId, name: 'Disposable Traders' }),
+    })
+    assert.equal(createCleanRes.status, 200)
+    const cleanSup = await createCleanRes.json()
+
+    const cashierDeleteRes = await fetch(`${baseUrl}/api/retail/delete-supplier`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cashierCookie },
+      body: JSON.stringify({ branchId, supplierId: cleanSup.id }),
+    })
+    assert.equal(cashierDeleteRes.status, 403)
+
+    const ownerDeleteRes = await fetch(`${baseUrl}/api/retail/delete-supplier`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ branchId, supplierId: cleanSup.id }),
+    })
+    assert.equal(ownerDeleteRes.status, 200)
+    assert.deepEqual(await ownerDeleteRes.json(), { deleted: true, archived: false })
+
+    const createDueRes = await fetch(`${baseUrl}/api/retail/create-supplier`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ branchId, name: 'Locked Balance Traders', openingBalancePaisa: 5000 }),
+    })
+    assert.equal(createDueRes.status, 200)
+    const dueSup = await createDueRes.json()
+
+    const blockedDeleteRes = await fetch(`${baseUrl}/api/retail/delete-supplier`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ branchId, supplierId: dueSup.id }),
+    })
+    assert.equal(blockedDeleteRes.status, 400)
+
+    const deactivateRes = await fetch(`${baseUrl}/api/retail/delete-supplier`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: ownerCookie },
+      body: JSON.stringify({ branchId, supplierId: dueSup.id, deactivateIfHasHistory: true }),
+    })
+    assert.equal(deactivateRes.status, 200)
+    assert.deepEqual(await deactivateRes.json(), { deleted: false, archived: true })
   })
 })

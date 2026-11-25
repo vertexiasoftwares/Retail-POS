@@ -21,6 +21,7 @@ export type RetailDataContextValue = {
   receivePurchase: (draft: PurchaseDraft, operationId: string) => Promise<OperationResult>
   paySupplier: (supplierId: string, amountRupees: number, method: SupplierPaymentMethod, reference: string, operationId: string) => Promise<OperationResult>
   createSupplier: (name: string | any, phone?: string) => Promise<OperationResult>
+  deleteSupplier: (supplierId: string, operationId: string, deactivateIfHasHistory?: boolean) => Promise<OperationResult>
 }
 
 export const RetailDataContext = createContext<RetailDataContextValue | null>(null)

@@ -65,13 +65,17 @@ export default function CashShiftsPage(props: PageProps) {
   const [showForceCloseModal, setShowForceCloseModal] = useState(false)
   const [forceCloseShiftId, setForceCloseShiftId] = useState<string | null>(null)
   const [forceCloseReason, setForceCloseReason] = useState('')
+  const [actionMenuId, setActionMenuId] = useState<string | null>(null)
+  const [selectedMovement, setSelectedMovement] = useState<CashSnapshot['movements'][number] | null>(null)
 
   useEscapeKey(() => {
     setShowOpenModal(false)
     setShowCloseModal(false)
     setShowMoveModal(false)
     setShowForceCloseModal(false)
-  }, showOpenModal || showCloseModal || showMoveModal || showForceCloseModal)
+    setActionMenuId(null)
+    setSelectedMovement(null)
+  }, showOpenModal || showCloseModal || showMoveModal || showForceCloseModal || Boolean(actionMenuId) || Boolean(selectedMovement))
 
   // Forms
   const [opening, setOpening] = useState('')
@@ -110,6 +114,20 @@ export default function CashShiftsPage(props: PageProps) {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+
+  useEffect(() => {
+    if (!actionMenuId) return
+    const closeMenu = () => setActionMenuId(null)
+    window.addEventListener('click', closeMenu)
+    return () => window.removeEventListener('click', closeMenu)
+  }, [actionMenuId])
+
+  const formatMovementDescription = (row: CashSnapshot['movements'][number]) => {
+    if (row.description?.trim()) return row.description.trim()
+    if (row.note?.trim()) return row.note.trim()
+    if (row.reference?.startsWith('shift-')) return 'Opening Float'
+    return row.reference || '-'
+  }
 
   const refresh = useCallback(async () => {
     setData(await window.vertexia!.cash.getSnapshot(branchId))
@@ -520,12 +538,15 @@ export default function CashShiftsPage(props: PageProps) {
                     <tbody>
                       {data?.movements?.slice(0, 10).map((row, idx) => {
                         const isIncome = row.direction === 'in'
+                        const friendlyDescription = formatMovementDescription(row)
+                        const actorName = row.actorName?.trim() || session?.name || 'Cashier'
+                        const menuOpen = actionMenuId === row.id
                         return (
                           <tr key={row.id}>
-                            <td className="text-slate-400 font-mono text-xs">{idx + 1}</td>
-                            <td className="text-xs text-slate-600">
+                            <td className="text-slate-500 font-mono text-sm">{idx + 1}</td>
+                            <td className="text-sm text-slate-600 whitespace-nowrap">
                               {new Date(row.occurredAt).toLocaleDateString()}{' '}
-                              <span className="text-slate-400">
+                              <span className="text-slate-500">
                                 {new Date(row.occurredAt).toLocaleTimeString([], {
                                   hour: '2-digit',
                                   minute: '2-digit',
@@ -533,35 +554,132 @@ export default function CashShiftsPage(props: PageProps) {
                               </span>
                             </td>
                             <td>
-                              <span className="font-semibold text-xs text-slate-800 capitalize">
-                                {row.type.replace('_', ' ')}
+                              <span className="font-semibold text-sm text-slate-800 capitalize">
+                                {row.type.replaceAll('_', ' ')}
                               </span>
                             </td>
-                            <td className="text-xs text-slate-600 max-w-[160px] truncate" title={row.reference || row.note || '-'}>
-                              {row.reference && row.reference.startsWith('shift-') ? 'Opening Float' : (row.reference || row.note || '-')}
+                            <td className="text-sm text-slate-700 max-w-[230px] truncate" title={friendlyDescription}>
+                              {friendlyDescription}
                             </td>
-                            <td className="font-bold text-xs">
-                              <span className={isIncome ? 'text-emerald-600' : 'text-rose-600'}>
+                            <td className="font-bold text-sm whitespace-nowrap">
+                              <span className={isIncome ? 'text-emerald-700' : 'text-rose-700'}>
                                 {isIncome ? '+' : '-'} {money(row.amountPaisa)}
                               </span>
                             </td>
-                            <td className="text-xs text-slate-600">Cash</td>
+                            <td className="text-sm text-slate-700">{row.paymentMethod || 'Cash'}</td>
                             <td>
                               <div className="flex items-center gap-1.5">
-                                <div className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold flex items-center justify-center">
-                                  {session?.name.slice(0, 1) || 'A'}
+                                <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 text-xs font-bold flex items-center justify-center">
+                                  {actorName.slice(0, 1).toUpperCase()}
                                 </div>
-                                <span className="text-xs text-slate-700">{session?.name || 'Cashier'}</span>
+                                <span className="text-sm text-slate-700">{actorName}</span>
                               </div>
                             </td>
-                            <td style={{ textAlign: 'center' }}>
+                            <td
+                              style={{ textAlign: 'center', position: 'relative', zIndex: menuOpen ? 60 : 1 }}
+                              onClick={e => e.stopPropagation()}
+                            >
                               <button
                                 type="button"
-                                className="text-slate-400 hover:text-slate-700"
+                                onClick={() => setActionMenuId(menuOpen ? null : row.id)}
+                                aria-expanded={menuOpen}
+                                aria-label={`Transaction options for ${friendlyDescription}`}
+                                className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 cursor-pointer"
                                 title="Transaction options"
                               >
                                 ···
                               </button>
+                              {menuOpen && (
+                                <div
+                                  className={`absolute right-2 ${idx >= 5 ? 'bottom-9' : 'top-9'} z-50 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 text-left text-sm`}
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActionMenuId(null)
+                                      setSelectedMovement(row)
+                                    }}
+                                    className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium cursor-pointer"
+                                  >
+                                    <Icon name="report" size={15} /> View Details
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActionMenuId(null)
+                                      const copyVal = row.reference || friendlyDescription
+                                      if (navigator.clipboard?.writeText) {
+                                        void navigator.clipboard.writeText(copyVal)
+                                      }
+                                      setNotice(`Copied reference: ${copyVal}`)
+                                    }}
+                                    className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium cursor-pointer"
+                                  >
+                                    <Icon name="copy" size={15} /> Copy Reference
+                                  </button>
+                                  {row.type === 'cash_sale' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActionMenuId(null)
+                                        props.onNavigate('Sales History')
+                                      }}
+                                      className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium cursor-pointer"
+                                    >
+                                      <Icon name="history" size={15} /> Open Sales History
+                                    </button>
+                                  )}
+                                  {row.type === 'sale_refund' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActionMenuId(null)
+                                        props.onNavigate('Returns')
+                                      }}
+                                      className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium cursor-pointer"
+                                    >
+                                      <Icon name="returnOrder" size={15} /> Open Returns
+                                    </button>
+                                  )}
+                                  {row.type === 'supplier_payment' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActionMenuId(null)
+                                        props.onNavigate('Suppliers')
+                                      }}
+                                      className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium cursor-pointer"
+                                    >
+                                      <Icon name="supplier" size={15} /> Open Suppliers
+                                    </button>
+                                  )}
+                                  {row.type === 'expense' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActionMenuId(null)
+                                        props.onNavigate('Expenses')
+                                      }}
+                                      className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium cursor-pointer"
+                                    >
+                                      <Icon name="expense" size={15} /> Open Expenses
+                                    </button>
+                                  )}
+                                  {row.type === 'customer_payment' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActionMenuId(null)
+                                        props.onNavigate('Customers')
+                                      }}
+                                      className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium cursor-pointer"
+                                    >
+                                      <Icon name="users" size={15} /> Open Customers
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </td>
                           </tr>
                         )
@@ -657,21 +775,24 @@ export default function CashShiftsPage(props: PageProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {data?.movements?.map(m => (
+                      {data?.movements?.map(m => {
+                        const friendlyDesc = formatMovementDescription(m)
+                        return (
                         <tr key={m.id}>
-                          <td className="text-xs">{new Date(m.occurredAt).toLocaleString()}</td>
-                          <td className="text-xs font-medium capitalize">{m.type.replace('_', ' ')}</td>
-                          <td className="text-xs uppercase font-semibold">{m.direction}</td>
-                          <td className="text-xs font-bold">
-                            <span className={m.direction === 'in' ? 'text-emerald-600' : 'text-rose-600'}>
+                          <td className="text-sm">{new Date(m.occurredAt).toLocaleString()}</td>
+                          <td className="text-sm font-medium capitalize">{m.type.replaceAll('_', ' ')}</td>
+                          <td className="text-sm uppercase font-semibold">{m.direction}</td>
+                          <td className="text-sm font-bold">
+                            <span className={m.direction === 'in' ? 'text-emerald-700' : 'text-rose-700'}>
                               {m.direction === 'in' ? '+' : '-'} {money(m.amountPaisa)}
                             </span>
                           </td>
-                          <td className="text-xs text-slate-600 max-w-[200px] truncate" title={m.reference || m.note || '-'}>
-                            {m.reference && m.reference.startsWith('shift-') ? 'Opening Float' : (m.reference || m.note || '-')}
+                          <td className="text-sm text-slate-700 max-w-[260px] truncate" title={friendlyDesc}>
+                            {friendlyDesc}
                           </td>
                         </tr>
-                      ))}
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1418,6 +1539,83 @@ export default function CashShiftsPage(props: PageProps) {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {selectedMovement && (
+          <div className="medkit-modal-backdrop" onClick={() => setSelectedMovement(null)}>
+            <div className="medkit-modal-card" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+              <div className="medkit-modal-header">
+                <h3>Cash Transaction Details</h3>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMovement(null)}
+                  className="text-slate-500 hover:text-slate-800 text-lg leading-none cursor-pointer"
+                  aria-label="Close transaction details"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="medkit-modal-body space-y-3 text-sm">
+                <div className="flex justify-between items-center py-2 border-b border-slate-100">
+                  <span className="text-slate-600 font-medium">Type</span>
+                  <span className="font-semibold text-slate-900 capitalize">
+                    {selectedMovement.type.replaceAll('_', ' ')}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-100">
+                  <span className="text-slate-600 font-medium">Amount</span>
+                  <span className={`font-bold ${selectedMovement.direction === 'in' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {selectedMovement.direction === 'in' ? '+' : '-'} {money(selectedMovement.amountPaisa)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-start gap-4 py-2 border-b border-slate-100">
+                  <span className="text-slate-600 font-medium shrink-0">Description</span>
+                  <span className="font-medium text-slate-900 text-right">
+                    {formatMovementDescription(selectedMovement)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-100">
+                  <span className="text-slate-600 font-medium">Date &amp; Time</span>
+                  <span className="text-slate-800">{new Date(selectedMovement.occurredAt).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-100">
+                  <span className="text-slate-600 font-medium">Payment Method</span>
+                  <span className="text-slate-800">{selectedMovement.paymentMethod || 'Cash'}</span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-100">
+                  <span className="text-slate-600 font-medium">Added By</span>
+                  <span className="text-slate-800">{selectedMovement.actorName?.trim() || session?.name || 'Cashier'}</span>
+                </div>
+                <div className="flex justify-between items-center gap-4 py-2">
+                  <span className="text-slate-600 font-medium shrink-0">Reference ID</span>
+                  <span className="font-mono text-xs text-slate-600 break-all text-right">
+                    {selectedMovement.reference || selectedMovement.id}
+                  </span>
+                </div>
+              </div>
+              <div className="medkit-modal-footer">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const copyVal = selectedMovement.reference || selectedMovement.id
+                    if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(copyVal)
+                    setNotice(`Copied reference: ${copyVal}`)
+                    setSelectedMovement(null)
+                  }}
+                  className="medkit-btn-secondary"
+                >
+                  Copy Reference
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMovement(null)}
+                  className="medkit-btn-primary"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         )}

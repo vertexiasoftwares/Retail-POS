@@ -7,6 +7,7 @@ import {
   formatLicenseExpiry,
   getSupportTelHref,
   SUPPORT_CONFIG,
+  VERTEXIA_BRAND_LOGO,
 } from '../config/supportConfig'
 import { useHelpTranslation } from '../i18n/helpDictionary'
 import { useSystemLogo } from '../settings/posSettings'
@@ -335,10 +336,10 @@ export function Sidebar({
           )}
         </button>
 
-        {/* Subtle Store & Version tagline matching mockup footer */}
+        {/* Subtle Powered by & Version tagline matching footer */}
         {isHovered && session && (
-          <div className="pt-1 px-1 flex items-center justify-between text-[11px] text-slate-500">
-            <span className="truncate">{session.businessName}</span>
+          <div className="pt-1 px-1 flex items-center justify-between text-[11px] text-slate-400">
+            <span className="truncate">Powered by Vertexia</span>
             <span className="text-[10px] font-mono">v{appVersion}</span>
           </div>
         )}
@@ -389,9 +390,9 @@ export function Sidebar({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <img
-                src={systemLogo}
+                src={VERTEXIA_BRAND_LOGO}
                 alt={SUPPORT_CONFIG.companyName}
-                style={{ width: 38, height: 38, objectFit: 'contain', flexShrink: 0 }}
+                style={{ width: 40, height: 40, objectFit: 'contain', flexShrink: 0 }}
               />
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

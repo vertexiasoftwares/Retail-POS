@@ -188,6 +188,7 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
       paySupplier: async (request: any) => apiClient.post('/retail/pay-supplier', request),
       createSupplier: async (name: string | Record<string, any>, phone?: string) =>
         apiClient.post('/retail/create-supplier', typeof name === 'object' ? name : { name, phone }),
+      deleteSupplier: async (request: any) => apiClient.post('/retail/delete-supplier', request),
     },
     dashboard: {
       getSnapshot: async (query: any) => apiClient.post('/dashboard/snapshot', query),

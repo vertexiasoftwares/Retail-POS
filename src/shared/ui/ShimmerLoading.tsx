@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { TextShimmer } from './TextShimmer'
+import LoaderOne from './LoaderOne'
 
 type ShimmerLoadingProps = {
   title?: string
@@ -25,7 +25,7 @@ export function ShimmerLoading({
         style={{ background: '#ffffff' }}
       >
         <div className="shimmer-loading-inner" style={{ maxWidth: '100%' }}>
-          <TextShimmer duration={1.4}>LOADING</TextShimmer>
+          <LoaderOne />
           {children}
         </div>
       </main>

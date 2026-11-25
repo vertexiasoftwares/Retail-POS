@@ -59,7 +59,126 @@ export class CashRepository {
         const shifts = rows.map(row => this.record(row));
         const activeShift = shifts.find(shift => shift.status === 'open') ?? null;
         const selected = activeShift ?? shifts[0];
-        const movements = selected ? this.db.prepare('SELECT t.*,n.reason FROM cash_transactions t LEFT JOIN cash_movement_notes n ON n.transaction_id=t.id WHERE t.shift_id=? ORDER BY t.occurred_at DESC,t.rowid DESC LIMIT 300').all(selected.id).map(row => ({ id: String(row.id), shiftId: String(row.shift_id), type: String(row.transaction_type), direction: row.direction, amountPaisa: Number(row.amount_paisa), reference: String(row.reference_id), note: String(row.reason ?? ''), occurredAt: String(row.occurred_at) })) : [];
+        const movements = selected ? this.db.prepare(`
+      SELECT
+        t.*,
+        n.reason,
+        COALESCE(un.name, us.name, ur.name, um.name, uc.name, ue.name, uer.name, uap.name, ush.name) AS actor_name,
+        s.invoice_number AS sale_invoice,
+        cs.name AS sale_customer,
+        sr.return_number AS bill_return_number,
+        sr.reason AS bill_return_reason,
+        mr.return_number AS manual_return_number,
+        mr.reason AS manual_return_reason,
+        sup.name AS supplier_name,
+        sp.reference AS supplier_payment_ref,
+        cr.receipt_number AS customer_receipt_number,
+        cr.customer_name_snapshot AS receipt_customer_name,
+        ex.description AS expense_description,
+        ex.category AS expense_category,
+        ep.expense_number AS expense_number,
+        er.reversal_number AS expense_reversal_number,
+        er.reason AS expense_reversal_reason,
+        sh.counter_id AS shift_counter_id
+      FROM cash_transactions t
+      LEFT JOIN cash_movement_notes n ON n.transaction_id = t.id
+      LEFT JOIN users un ON un.id = n.created_by
+      LEFT JOIN cash_shifts sh ON sh.id = t.shift_id
+      LEFT JOIN users ush ON ush.id = sh.cashier_id
+      LEFT JOIN sales s ON s.id = t.reference_id
+      LEFT JOIN users us ON us.id = s.cashier_id
+      LEFT JOIN customers cs ON cs.id = s.customer_id
+      LEFT JOIN sale_returns sr ON sr.id = t.reference_id
+      LEFT JOIN users ur ON ur.id = sr.created_by
+      LEFT JOIN manual_returns mr ON mr.id = t.reference_id
+      LEFT JOIN users um ON um.id = mr.created_by
+      LEFT JOIN supplier_payments sp ON sp.id = t.reference_id
+      LEFT JOIN suppliers sup ON sup.id = sp.supplier_id
+      LEFT JOIN (
+        SELECT entity_id, user_id FROM audit_events WHERE entity_type = 'payment'
+      ) ap ON ap.entity_id = sp.id
+      LEFT JOIN users uap ON uap.id = ap.user_id
+      LEFT JOIN customer_receipts cr ON cr.id = t.reference_id
+      LEFT JOIN users uc ON uc.id = cr.created_by
+      LEFT JOIN expenses ex ON ex.id = t.reference_id
+      LEFT JOIN expense_postings ep ON ep.expense_id = ex.id
+      LEFT JOIN users ue ON ue.id = ep.created_by
+      LEFT JOIN expense_reversals er ON er.id = t.reference_id
+      LEFT JOIN users uer ON uer.id = er.created_by
+      WHERE t.shift_id = ?
+      ORDER BY t.occurred_at DESC, t.rowid DESC
+      LIMIT 300
+    `).all(selected.id).map(row => {
+            const type = String(row.transaction_type);
+            const ref = String(row.reference_id ?? '');
+            const reason = String(row.reason ?? '').trim();
+            let description = reason;
+            if (!description) {
+                if (type === 'opening_cash' || ref.startsWith('shift-')) {
+                    description = row.shift_counter_id ? `Opening Float (${String(row.shift_counter_id)})` : 'Opening Float';
+                }
+                else if (type === 'cash_sale' && row.sale_invoice) {
+                    const cust = row.sale_customer ? ` · ${String(row.sale_customer)}` : '';
+                    description = `Bill ${String(row.sale_invoice)}${cust}`;
+                }
+                else if (type === 'sale_refund') {
+                    const retNum = row.bill_return_number || row.manual_return_number;
+                    const retReason = row.bill_return_reason || row.manual_return_reason;
+                    if (retNum) {
+                        description = `Return ${String(retNum)}${retReason ? ` · ${String(retReason)}` : ''}`;
+                    }
+                    else {
+                        description = 'Cash Sale Refund';
+                    }
+                }
+                else if (type === 'supplier_payment') {
+                    const supName = row.supplier_name ? String(row.supplier_name) : '';
+                    const spRef = row.supplier_payment_ref ? String(row.supplier_payment_ref).trim() : '';
+                    const showSpRef = spRef && !spRef.startsWith('supplier-payment-') && spRef.toLowerCase() !== 'cash';
+                    description = supName
+                        ? `Supplier: ${supName}${showSpRef ? ` (${spRef})` : ''}`
+                        : (showSpRef ? `Supplier Payment (${spRef})` : 'Supplier Payment');
+                }
+                else if (type === 'customer_payment') {
+                    if (row.customer_receipt_number || row.receipt_customer_name) {
+                        const parts = [row.customer_receipt_number ? `Receipt ${String(row.customer_receipt_number)}` : '', row.receipt_customer_name ? String(row.receipt_customer_name) : ''].filter(Boolean);
+                        description = parts.join(' · ');
+                    }
+                    else {
+                        description = 'Customer Udhaar Payment';
+                    }
+                }
+                else if (type === 'expense') {
+                    const expNum = row.expense_number ? `${String(row.expense_number)} · ` : '';
+                    const expCat = row.expense_category ? `${String(row.expense_category)}: ` : '';
+                    const expDesc = row.expense_description ? String(row.expense_description) : 'Shop Expense';
+                    description = `${expNum}${expCat}${expDesc}`;
+                }
+                else if (type === 'expense_reversal') {
+                    const revNum = row.expense_reversal_number ? `${String(row.expense_reversal_number)} · ` : 'Expense Reversal · ';
+                    description = `${revNum}${String(row.expense_reversal_reason ?? 'Reversed')}`;
+                }
+                else if (ref && !/^(cash-|sale-|supplier-payment-|sale-return-|expense-|receipt-|shift-)/.test(ref)) {
+                    description = ref;
+                }
+                else {
+                    description = type.replaceAll('_', ' ');
+                }
+            }
+            return {
+                id: String(row.id),
+                shiftId: String(row.shift_id),
+                type,
+                direction: row.direction,
+                amountPaisa: Number(row.amount_paisa),
+                reference: ref,
+                note: reason,
+                description,
+                actorName: row.actor_name ? String(row.actor_name) : '',
+                paymentMethod: row.payment_method ? String(row.payment_method) : 'Cash',
+                occurredAt: String(row.occurred_at),
+            };
+        }) : [];
         const movementCount = selected ? Number(this.db.prepare('SELECT COUNT(*) AS n FROM cash_transactions WHERE shift_id=?').get(selected.id).n) : 0;
         return { activeShift, shifts, movements, movementCount };
     }

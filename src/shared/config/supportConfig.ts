@@ -1,4 +1,9 @@
 /**
+ * Fixed Vertexia brand logo asset (never overridden by store settings).
+ */
+export const VERTEXIA_BRAND_LOGO = '/vertexia-logo-transparent.png'
+
+/**
  * Single configuration source for Vertexia POS customer support details.
  * Update phone, WhatsApp number, or support hours here only.
  */

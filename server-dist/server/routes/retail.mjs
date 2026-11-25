@@ -128,5 +128,31 @@ export function registerRetailRoutes(app, db, auth, sync) {
             return reply.status(400).send({ error: 'CreateSupplierError', message: err?.message || 'Failed to create supplier.', statusCode: 400 });
         }
     });
+    // POST /api/retail/delete-supplier
+    app.post('/api/retail/delete-supplier', async (request, reply) => {
+        const body = request.body;
+        if (!body || typeof body.branchId !== 'string' || !body.branchId.trim()) {
+            return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+        }
+        if (typeof body.supplierId !== 'string' || !body.supplierId.trim()) {
+            return reply.status(400).send({ error: 'BadRequest', message: 'A supplier is required.', statusCode: 400 });
+        }
+        const guarded = enforceAuth(request, reply, auth, db, 'suppliers.pay', body.branchId, true);
+        if (!guarded)
+            return;
+        try {
+            const payload = ensureOperationId(body, guarded.session.userId);
+            const result = db.retail.deleteSupplier(payload);
+            sync?.broadcast({
+                type: 'purchase:received',
+                branchId: body.branchId,
+                businessId: guarded.session.businessId,
+            });
+            return result;
+        }
+        catch (err) {
+            return reply.status(400).send({ error: 'DeleteSupplierError', message: err?.message || 'Failed to delete supplier.', statusCode: 400 });
+        }
+    });
 }
 //# sourceMappingURL=retail.mjs.map

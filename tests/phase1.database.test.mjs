@@ -508,3 +508,58 @@ test('1.11 legacy browser-mock storage, seeds, and legacyDataAvailable flags are
   assert.equal(readRepoFile('src/app/data/retailData.context.ts').includes('legacyDataAvailable'), false)
   assert.equal(readRepoFile('src/app/data/RetailDataProvider.tsx').includes('legacyDataAvailable'), false)
 })
+
+test('1.12 CashRepository returns human-readable transaction descriptions & deleteSupplier enforces history/idempotency/audit', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'vertexia-ph1-cash-sup-'))
+  const dbPath = join(dir, 'store.db')
+  let db
+  t.after(() => {
+    try { db?.close() } catch {}
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  db = new VertexiaDatabase(dbPath, clock)
+  const auth = new AuthRepository(db.connection, clock)
+  const setupSession = await auth.setup({ businessName: 'Kiryana Mart', branchName: 'Main', city: 'Lahore', ownerName: 'Owner', username: 'owner', password: ownerPassword })
+  db.setActor(setupSession.userId)
+  db.openPosShift(branchId, 500000, randomUUID(), 'Morning drawer', 'Counter 1')
+
+  const item = db.saveProduct(branchId, productDraft({ name: 'Cooking Oil 1L', openingStockMilli: 5000 }))
+  const sale = db.completePosSale({
+    branchId,
+    operationId: randomUUID(),
+    customerId: 'customer-walk-in',
+    paymentMethod: 'Cash',
+    cashReceivedPaisa: 30000,
+    lines: [{ productId: item.id, quantityMilli: 1000, discountBasisPoints: 0 }],
+  })
+
+  const supClean = db.retail.createSupplier({ branchId, name: 'Clean Unused Supplier', phone: '03001112222', operationId: randomUUID() })
+  const supDue = db.retail.createSupplier({ branchId, name: 'Metro Wholesale', phone: '03003334444', openingBalancePaisa: 15000, operationId: randomUUID() })
+  db.retail.paySupplier({ branchId, operationId: randomUUID(), supplierId: supDue.id, amountPaisa: 10000, method: 'Cash', reference: 'REF-100' })
+
+  const cashSnap = db.cash.snapshot(branchId)
+  const saleMov = cashSnap.movements.find(m => m.type === 'cash_sale')
+  const supMov = cashSnap.movements.find(m => m.type === 'supplier_payment')
+  const openMov = cashSnap.movements.find(m => m.type === 'opening_cash')
+  assert.ok(saleMov && saleMov.description.includes(sale.invoiceNumber))
+  assert.equal(saleMov.description.startsWith('sale-'), false)
+  assert.ok(supMov && supMov.description.includes('Metro Wholesale'))
+  assert.equal(supMov.description.startsWith('supplier-payment-'), false)
+  assert.ok(openMov && openMov.description.includes('Opening Float'))
+  assert.equal(saleMov.actorName, 'Owner')
+
+  // Clean supplier with zero history deletes permanently + idempotent replay works
+  const delOp = randomUUID()
+  assert.deepEqual(db.retail.deleteSupplier({ branchId, operationId: delOp, supplierId: supClean.id }), { deleted: true, archived: false })
+  assert.deepEqual(db.retail.deleteSupplier({ branchId, operationId: delOp, supplierId: supClean.id }), { deleted: true, archived: false })
+  assert.equal(db.connection.prepare('SELECT COUNT(*) AS n FROM suppliers WHERE id=?').get(supClean.id).n, 0)
+
+  // Supplier with payment/balance blocks permanent delete but allows deactivate + audit row
+  assert.throws(() => db.retail.deleteSupplier({ branchId, operationId: randomUUID(), supplierId: supDue.id }), /cannot be permanently deleted/)
+  const deact = db.retail.deleteSupplier({ branchId, operationId: randomUUID(), supplierId: supDue.id, deactivateIfHasHistory: true })
+  assert.deepEqual(deact, { deleted: false, archived: true })
+  assert.equal(db.connection.prepare('SELECT is_active FROM suppliers WHERE id=?').get(supDue.id).is_active, 0)
+  const auditCount = db.connection.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE entity_type='supplier' AND entity_id IN (?,?)").get(supClean.id, supDue.id).n
+  assert.ok(auditCount >= 2)
+})

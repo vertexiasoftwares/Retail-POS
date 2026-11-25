@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { REFRESH_SHIMMER_EVENT } from '../../services/retail-events'
 import { getPosSettings } from '../settings/posSettings'
+import LoaderOne from './LoaderOne'
 
 export type TextShimmerProps = {
   duration?: number
@@ -9,56 +10,19 @@ export type TextShimmerProps = {
 }
 
 /**
- * Pure CSS TextShimmer — extra-large, bold shimmering "LOADING" text like a display splash screen.
+ * TextShimmer wrapper retained for compatibility; renders LoaderOne.
  */
-export function TextShimmer({
-  duration = 1.4,
-  className = '',
-  children = 'LOADING',
-}: TextShimmerProps) {
-  return (
-    <>
-      <span
-        className={`vtx-text-shimmer ${className}`}
-        style={{
-          display: 'inline-block',
-          fontFamily: 'var(--font-heading, "Plus Jakarta Sans", "Inter", system-ui, -apple-system, sans-serif)',
-          fontSize: 'clamp(58px, 11vw, 132px)',
-          lineHeight: 1.05,
-          fontWeight: 900,
-          letterSpacing: '0.1em',
-          textTransform: 'uppercase',
-          userSelect: 'none',
-          backgroundImage:
-            'linear-gradient(100deg, #cbd5e1 0%, #94a3b8 28%, #1e293b 44%, #5e0cf3 50%, #1e293b 56%, #94a3b8 72%, #cbd5e1 100%)',
-          backgroundSize: '240% 100%',
-          WebkitBackgroundClip: 'text',
-          backgroundClip: 'text',
-          color: 'transparent',
-          WebkitTextFillColor: 'transparent',
-          animation: `vtx-text-shimmer-sweep ${Math.max(duration, 0.8)}s linear infinite`,
-        }}
-      >
-        {children}
-      </span>
-      <style>{`
-        @keyframes vtx-text-shimmer-sweep {
-          0% { background-position: 180% center; }
-          100% { background-position: -60% center; }
-        }
-      `}</style>
-    </>
-  )
+export function TextShimmer(_props: TextShimmerProps) {
+  return <LoaderOne />
 }
 
 /**
- * PageTransitionShimmer — Shows large bold "LOADING" TextShimmer for 3-4 seconds ONLY on
+ * PageTransitionShimmer — Shows LoaderOne for the configured load duration ONLY on
  * initial browser load/reload and when Refresh buttons are clicked (NOT on tab switches).
  */
 export function PageTransitionShimmer({
   children,
   duration,
-  text = 'LOADING',
 }: {
   children: React.ReactNode
   duration?: number
@@ -133,7 +97,7 @@ export function PageTransitionShimmer({
             transition: 'opacity 0.55s ease',
           }}
         >
-          <TextShimmer duration={1.4}>{text}</TextShimmer>
+          <LoaderOne />
         </div>
       )}
       <div

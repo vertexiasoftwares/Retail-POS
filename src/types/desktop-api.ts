@@ -340,6 +340,8 @@ export type PurchaseReceiveRequest = {
 }
 export type PurchaseReceiveResult = { purchaseId:string;purchaseNumber:string;supplierId:string;totalPaisa:number }
 export type SupplierPayRequest = { branchId:string;operationId:string;supplierId:string;amountPaisa:number;method:RetailPaymentMethod;reference:string }
+export type SupplierDeleteRequest = { branchId:string;operationId:string;supplierId:string;deactivateIfHasHistory?:boolean }
+export type SupplierDeleteResult = { deleted:boolean;archived:boolean }
 export type RetailSnapshot = {
   branchId:string
   businessDate:string
@@ -460,6 +462,7 @@ export type VertexiaDesktopApi = {
     receivePurchase(request:PurchaseReceiveRequest):Promise<PurchaseReceiveResult>
     paySupplier(request:SupplierPayRequest):Promise<{paymentId:string;outstandingPaisa:number}>
     createSupplier(name: string | Record<string, any>, phone?: string): Promise<{ id: string; name: string }>
+    deleteSupplier(request: SupplierDeleteRequest): Promise<SupplierDeleteResult>
   }
   dashboard: {
     getSnapshot(query: DashboardQuery): Promise<DashboardSnapshot>

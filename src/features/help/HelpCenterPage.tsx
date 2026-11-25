@@ -10,9 +10,9 @@ import {
   formatLicenseExpiry,
   getSupportTelHref,
   SUPPORT_CONFIG,
+  VERTEXIA_BRAND_LOGO,
 } from '../../shared/config/supportConfig'
 import { useHelpTranslation } from '../../shared/i18n/helpDictionary'
-import { useSystemLogo } from '../../shared/settings/posSettings'
 import { triggerRefreshShimmer } from '../../services/retail-events'
 import type { SupportInfo } from '../../types/desktop-api'
 
@@ -31,7 +31,6 @@ async function openSupportWhatsApp(url: string): Promise<void> {
 export default function HelpCenterPage(props: PageProps) {
   const { session } = useAuth()
   const { lang, setLang, t } = useHelpTranslation()
-  const systemLogo = useSystemLogo()
 
   const [supportInfo, setSupportInfo] = useState<SupportInfo>(() => ({
     appVersion: SUPPORT_CONFIG.fallbackVersion,
@@ -196,7 +195,7 @@ export default function HelpCenterPage(props: PageProps) {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 260, flex: '1 1 320px' }}>
             <img
-              src={systemLogo}
+              src={VERTEXIA_BRAND_LOGO}
               alt={SUPPORT_CONFIG.companyName}
               style={{ width: 48, height: 48, objectFit: 'contain', flexShrink: 0 }}
             />

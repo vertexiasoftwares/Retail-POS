@@ -254,6 +254,40 @@ export class RetailRepository {
             return { paymentId: id, outstandingPaisa: due - amount };
         });
     }
+    deleteSupplier(request) {
+        if (!request || typeof request !== 'object')
+            throw new Error('Invalid supplier delete request.');
+        requireText(request.operationId, 'Operation identifier', 100);
+        requireText(request.supplierId, 'Supplier', 100);
+        const deactivateIfHasHistory = Boolean(request.deactivateIfHasHistory);
+        return postOperation(this.db, request.branchId, request.operationId, 'supplier.delete', { supplierId: request.supplierId, deactivateIfHasHistory }, this.now().toISOString(), () => {
+            this.branch(request.branchId);
+            const supplier = this.db.prepare('SELECT id, name, is_active FROM suppliers WHERE id=? AND business_id=?').get(request.supplierId, this.businessId);
+            if (!supplier)
+                throw new Error('Supplier was not found.');
+            const counts = this.db.prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM purchases WHERE supplier_id=?) AS purchase_count,
+          (SELECT COUNT(*) FROM supplier_payments WHERE supplier_id=?) AS payment_count,
+          COALESCE((SELECT SUM(debit_paisa - credit_paisa) FROM supplier_ledger WHERE supplier_id=?), 0) AS balance_paisa
+      `).get(request.supplierId, request.supplierId, request.supplierId);
+            const hasHistory = Number(counts.purchase_count) > 0 || Number(counts.payment_count) > 0 || Number(counts.balance_paisa) !== 0;
+            const time = this.now().toISOString();
+            if (hasHistory) {
+                if (!deactivateIfHasHistory) {
+                    throw new Error('This supplier has purchases, payments, or an outstanding balance and cannot be permanently deleted. Deactivate it instead to keep your financial records intact.');
+                }
+                this.db.prepare('UPDATE suppliers SET is_active=0 WHERE id=? AND business_id=?').run(request.supplierId, this.businessId);
+                this.audit(request.branchId, 'Supplier', request.supplierId, 'Supplier deactivated', String(supplier.name), time);
+                return { deleted: false, archived: true };
+            }
+            this.db.prepare('DELETE FROM supplier_ledger WHERE supplier_id=?').run(request.supplierId);
+            this.db.prepare('DELETE FROM supplier_profiles WHERE supplier_id=?').run(request.supplierId);
+            this.db.prepare('DELETE FROM suppliers WHERE id=? AND business_id=?').run(request.supplierId, this.businessId);
+            this.audit(request.branchId, 'Supplier', request.supplierId, 'Supplier deleted', String(supplier.name), time);
+            return { deleted: true, archived: false };
+        });
+    }
     getSnapshot(branchId) {
         this.branch(branchId);
         this.db.exec('BEGIN');

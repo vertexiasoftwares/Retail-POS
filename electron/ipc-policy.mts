@@ -12,7 +12,7 @@ const permissions: Record<string, Permission> = {
   'expenses:list': 'expenses.read', 'expenses:post': 'expenses.manage', 'expenses:reverse': 'expenses.manage',
   'cash:get-snapshot': 'shifts.read', 'cash:close-shift': 'shifts.close', 'cash:move': 'cash.manage', 'cash:force-close': 'cash.manage',
   'backup:get-status': 'backup.manage', 'backup:create': 'backup.manage', 'backup:export': 'backup.manage', 'backup:preview': 'backup.manage', 'backup:cancel': 'backup.manage', 'backup:restore': 'backup.manage',
-  'retail:get-snapshot': 'retail.read', 'retail:adjust-stock': 'stock.adjust', 'retail:receive-purchase': 'purchases.receive', 'retail:pay-supplier': 'suppliers.pay', 'retail:create-supplier': 'suppliers.pay',
+  'retail:get-snapshot': 'retail.read', 'retail:adjust-stock': 'stock.adjust', 'retail:receive-purchase': 'purchases.receive', 'retail:pay-supplier': 'suppliers.pay', 'retail:create-supplier': 'suppliers.pay', 'retail:delete-supplier': 'suppliers.pay',
   'dashboard:get-snapshot': 'dashboard.read', 'dashboard:search': 'dashboard.read', 'system:get-database-path': 'settings.manage',
   'pos:get-bootstrap': 'pos.sell', 'pos:complete-sale': 'pos.sell', 'pos:hold-sale': 'pos.sell', 'pos:resume-held-sale': 'pos.sell', 'pos:delete-held-sale': 'pos.sell', 'pos:open-shift': 'shifts.open', 'pos:create-product': 'products.manage', 'pos:create-customer': 'customers.create',
   'products:list': 'products.read', 'products:save': 'products.manage', 'products:toggle-status': 'products.manage', 'products:delete': 'products.manage', 'products:import-csv': 'products.manage', 'products:export-csv': 'data.export',
@@ -20,7 +20,7 @@ const permissions: Record<string, Permission> = {
   'auth:list-users': 'users.manage', 'auth:create-user': 'users.manage', 'auth:update-user': 'users.manage', 'auth:reset-password': 'users.manage',
   'auth:verify-password': 'settings.manage', 'auth:update-business': 'settings.manage',
 }
-const requestBranches = new Set(['branches:create', 'branches:update', 'branches:set-active', 'transfers:list', 'transfers:dispatch', 'transfers:receive', 'transfers:cancel', 'reports:snapshot', 'reports:export-csv', 'customers:list', 'customers:create', 'customers:update', 'customers:collect', 'expenses:list', 'expenses:post', 'expenses:reverse', 'cash:close-shift', 'cash:move', 'cash:force-close', 'retail:adjust-stock', 'retail:receive-purchase', 'retail:pay-supplier', 'retail:create-supplier', 'dashboard:get-snapshot', 'pos:complete-sale', 'products:list', 'sales:get-snapshot', 'sales:create-return', 'sales:create-manual-return', 'sales:list-returns', 'sales:export-csv'])
+const requestBranches = new Set(['branches:create', 'branches:update', 'branches:set-active', 'transfers:list', 'transfers:dispatch', 'transfers:receive', 'transfers:cancel', 'reports:snapshot', 'reports:export-csv', 'customers:list', 'customers:create', 'customers:update', 'customers:collect', 'expenses:list', 'expenses:post', 'expenses:reverse', 'cash:close-shift', 'cash:move', 'cash:force-close', 'retail:adjust-stock', 'retail:receive-purchase', 'retail:pay-supplier', 'retail:create-supplier', 'retail:delete-supplier', 'dashboard:get-snapshot', 'pos:complete-sale', 'products:list', 'sales:get-snapshot', 'sales:create-return', 'sales:create-manual-return', 'sales:list-returns', 'sales:export-csv'])
 const idBranches = new Set(['transfers:detail', 'reports:valuation', 'customers:detail', 'customers:receipt', 'cash:get-snapshot', 'retail:get-snapshot', 'pos:get-bootstrap', 'pos:hold-sale', 'pos:open-shift', 'pos:create-product', 'products:save', 'products:toggle-status', 'products:delete', 'products:import-csv', 'products:export-csv', 'sales:get-detail', 'sales:find-by-invoice', 'auth:select-branch'])
 const publicChannels = new Set([
   'auth:status', 'auth:setup', 'auth:login', 'auth:logout',
@@ -105,7 +105,7 @@ export function scopeOperation(channel: string, args: unknown[], userId: string)
     args[2] = 'op-' + createHash('sha256').update(JSON.stringify([userId, args[2]])).digest('hex')
     return
   }
-  if (!['branches:create', 'branches:update', 'branches:set-active', 'transfers:dispatch', 'transfers:receive', 'transfers:cancel', 'customers:create', 'customers:update', 'customers:collect', 'expenses:post', 'expenses:reverse', 'pos:complete-sale', 'sales:create-return', 'sales:create-manual-return', 'retail:receive-purchase', 'retail:pay-supplier', 'retail:create-supplier', 'retail:adjust-stock', 'cash:close-shift', 'cash:move'].includes(channel)) return
+  if (!['branches:create', 'branches:update', 'branches:set-active', 'transfers:dispatch', 'transfers:receive', 'transfers:cancel', 'customers:create', 'customers:update', 'customers:collect', 'expenses:post', 'expenses:reverse', 'pos:complete-sale', 'sales:create-return', 'sales:create-manual-return', 'retail:receive-purchase', 'retail:pay-supplier', 'retail:create-supplier', 'retail:delete-supplier', 'retail:adjust-stock', 'cash:close-shift', 'cash:move'].includes(channel)) return
   const request = args[0]
   if (!request || typeof request !== 'object' || !('operationId' in request) || request.operationId === undefined) return
   if (typeof request.operationId !== 'string' || !request.operationId.trim() || request.operationId.length > 100) throw new Error('Invalid operation identifier.')

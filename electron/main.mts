@@ -20,7 +20,7 @@ import type { BackupRestoreRequest, CashCloseRequest, CashForceCloseRequest, Cas
 import { authorizeIpc, scopeOperation, licenseBranches } from './ipc-policy.mjs'
 import { requiresTransactionLicense } from './licensing/policy.mjs'
 import type { BusinessSetupInput, BusinessUpdateInput, StaffCreateInput, StaffUpdateInput } from '../src/types/auth.js'
-import type { PurchaseReceiveRequest, StockAdjustmentRequest, SupplierPayRequest } from '../src/types/desktop-api.js'
+import type { PurchaseReceiveRequest, StockAdjustmentRequest, SupplierDeleteRequest, SupplierPayRequest } from '../src/types/desktop-api.js'
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const developmentUrl = !app.isPackaged ? process.env.VITE_DEV_SERVER_URL : undefined
@@ -213,6 +213,7 @@ function registerIpc() {
   handle('retail:receive-purchase', (_event, request: unknown) => database!.retail.receivePurchase(request as PurchaseReceiveRequest))
   handle('retail:pay-supplier', (_event, request: unknown) => database!.retail.paySupplier(request as SupplierPayRequest))
   handle('retail:create-supplier', (_event, input: unknown, phone?: unknown) => database!.retail.createSupplier(input as any, phone as string | undefined))
+  handle('retail:delete-supplier', (_event, request: unknown) => database!.retail.deleteSupplier(request as SupplierDeleteRequest))
   handle('dashboard:get-snapshot', (_event, query: unknown) => {
     const result = database!.getDashboardSnapshot(validateDashboardQuery(query))
     result.branches = result.branches.filter(branch => auth!.current()!.branches.some(assigned => assigned.id === branch.id))

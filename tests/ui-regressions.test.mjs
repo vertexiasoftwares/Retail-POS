@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { VertexiaDatabase } from '../electron-dist/electron/database/database.mjs'
@@ -159,8 +159,9 @@ test('My Account is removed, Sidebar shows Settings and Help without Sign out, S
 
   assert.match(appSrc, /PageTransitionShimmer/)
   assert.equal(appSrc.includes('key={pageKey}'), false)
-  assert.match(shimmerSrc, /fontSize:\s*'clamp\(58px, 11vw, 132px\)'/)
-  assert.match(shimmerSrc, /children = 'LOADING'/)
+  assert.match(shimmerSrc, /<LoaderOne \/>/)
+  assert.match(readRepoFile('src/shared/ui/LoaderOne.tsx'), /bg-blue-500/)
+  assert.match(readRepoFile('src/shared/ui/ShimmerLoading.tsx'), /<LoaderOne \/>/)
 })
 
 test('Settings is full-width with password-protected Save/Reset, custom system logo only inside POS, unclipped Reports donut, and real support number', () => {
@@ -248,4 +249,39 @@ test('Help Card & Help Center use single support config with 92 317 2981931, pro
   // Offline bundled content & Report a Problem opens WhatsApp
   assert.match(helpPageSrc, /HelpCenterPage/)
   assert.match(helpPageSrc, /buildWhatsAppSupportUrl/)
+})
+
+test('Vertexia brand logo, Powered by Vertexia footer, LOADING shimmer, cash transaction actions & delete supplier UI', () => {
+  const sidebarSrc = readRepoFile('src/shared/layout/Sidebar.tsx')
+  const helpPageSrc = readRepoFile('src/features/help/HelpCenterPage.tsx')
+  const configSrc = readRepoFile('src/shared/config/supportConfig.ts')
+  const baseCss = readRepoFile('src/styles/base.css')
+  const shimmerSrc = readRepoFile('src/shared/ui/TextShimmer.tsx')
+  const cashPageSrc = readRepoFile('src/features/cash-shifts/CashShiftsPage.tsx')
+  const suppliersSrc = readRepoFile('src/features/suppliers/SuppliersPage.tsx')
+
+  // Fixed transparent Vertexia logo (never overridden by store settings)
+  assert.equal(existsSync(join(process.cwd(), 'public/vertexia-logo-transparent.png')), true)
+  assert.match(configSrc, /VERTEXIA_BRAND_LOGO\s*=\s*'\/vertexia-logo-transparent\.png'/)
+  assert.match(sidebarSrc, /src=\{VERTEXIA_BRAND_LOGO\}/)
+  assert.match(sidebarSrc, /Powered by Vertexia/)
+  assert.match(helpPageSrc, /src=\{VERTEXIA_BRAND_LOGO\}/)
+  assert.equal(/useSystemLogo/.test(helpPageSrc), false)
+
+  // LoaderOne bouncing dots animation in loading overlay & ShimmerLoading
+  const loaderSrc = readRepoFile('src/shared/ui/LoaderOne.tsx')
+  assert.match(loaderSrc, /framer-motion/)
+  assert.match(loaderSrc, /repeat:\s*Infinity/)
+  assert.match(shimmerSrc, /import LoaderOne from '\.\/LoaderOne'/)
+
+  // Cash Shifts human-readable descriptions + 3-dots actions dropdown & modal
+  assert.match(cashPageSrc, /formatMovementDescription/)
+  assert.match(cashPageSrc, /View Details/)
+  assert.match(cashPageSrc, /Copy Reference/)
+  assert.match(cashPageSrc, /Cash Transaction Details/)
+
+  // Suppliers 3-dots Delete Supplier menu & confirm modal
+  assert.match(suppliersSrc, /Delete Supplier/)
+  assert.match(suppliersSrc, /DeleteSupplierModal/)
+  assert.match(suppliersSrc, /Deactivate Supplier/)
 })

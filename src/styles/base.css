@@ -1508,3 +1508,41 @@ select.line-discount {
   50% { transform: translateY(-4px); }
 }
 
+.vtx-loading-shimmer {
+  display: inline-block;
+  font-family: var(--font-heading, 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif);
+  font-size: clamp(58px, 11vw, 132px);
+  line-height: 1.05;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  user-select: none;
+  background-color: #94a3b8;
+  background-image: linear-gradient(
+    110deg,
+    #cbd5e1 0%,
+    #94a3b8 32%,
+    #334155 42%,
+    #7c3aed 47%,
+    #f8fafc 50%,
+    #5e0cf3 53%,
+    #1e293b 58%,
+    #94a3b8 68%,
+    #cbd5e1 100%
+  );
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  will-change: background-position;
+  animation: vertexia-loading-beam 1.4s linear infinite;
+}
+
+@keyframes vertexia-loading-beam {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+

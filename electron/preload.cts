@@ -83,6 +83,7 @@ const api: VertexiaDesktopApi = {
     receivePurchase: request => ipcRenderer.invoke('retail:receive-purchase', request),
     paySupplier: request => ipcRenderer.invoke('retail:pay-supplier', request),
     createSupplier: (name, phone) => ipcRenderer.invoke('retail:create-supplier', name, phone),
+    deleteSupplier: request => ipcRenderer.invoke('retail:delete-supplier', request),
   },
   dashboard: {
     getSnapshot: (query: DashboardQuery) => ipcRenderer.invoke('dashboard:get-snapshot', query),

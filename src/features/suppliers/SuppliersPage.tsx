@@ -77,12 +77,14 @@ function SuppliersTable({
   onSelect,
   onPaySupplier,
   onNewPurchase,
+  onDeleteSupplier,
 }: {
   suppliers: SupplierRecord[]
   selectedId: string
   onSelect: (id: string) => void
   onPaySupplier: (supplier: SupplierRecord) => void
   onNewPurchase: () => void
+  onDeleteSupplier: (supplier: SupplierRecord) => void
 }) {
   const [tab, setTab] = useState('All Suppliers')
   const [search, setSearch] = useState('')
@@ -306,9 +308,20 @@ function SuppliersTable({
                           setActionMenuId(null)
                           onNewPurchase()
                         }}
-                        className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium"
+                        className="w-full px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#5E0CF3] flex items-center gap-2 font-medium text-sm cursor-pointer"
                       >
                         <Icon name="cart" size={14} /> New Purchase
+                      </button>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActionMenuId(null)
+                          onDeleteSupplier(supplier)
+                        }}
+                        className="w-full px-3 py-2 text-rose-700 hover:bg-rose-50 hover:text-rose-800 flex items-center gap-2 font-medium text-sm cursor-pointer"
+                      >
+                        <Icon name="close" size={14} /> Delete Supplier
                       </button>
                     </div>
                   )}
@@ -1051,6 +1064,125 @@ function ViewAllPurchasesModal({
   )
 }
 
+function DeleteSupplierModal({
+  supplier,
+  onClose,
+  onDeleted,
+}: {
+  supplier: SupplierRecord
+  onClose: () => void
+  onDeleted: (result: { supplierId: string; archived: boolean; supplierName: string }) => void
+}) {
+  const { busy, deleteSupplier } = useRetailData()
+  const deleteOp = useOperationIdentity(`supplier-delete-${supplier.id}`)
+  const deactivateOp = useOperationIdentity(`supplier-deactivate-${supplier.id}`)
+  const hasFinancialHistory =
+    supplier.totalPurchasesRupees > 0 ||
+    supplier.totalPaidRupees > 0 ||
+    Math.abs(supplier.outstandingRupees) > 0
+  const [error, setError] = useState('')
+  const [needsDeactivateFallback, setNeedsDeactivateFallback] = useState(hasFinancialHistory)
+
+  async function handleConfirm(deactivate: boolean) {
+    setError('')
+    const op = deactivate ? deactivateOp : deleteOp
+    const requestKey = { supplierId: supplier.id, deactivate }
+    const result = await deleteSupplier(supplier.id, op.idFor(requestKey), deactivate)
+    if (!result.ok) {
+      if (!deactivate && result.error.includes('cannot be permanently deleted')) {
+        setNeedsDeactivateFallback(true)
+      }
+      setError(result.error)
+      return
+    }
+    op.reset()
+    onDeleted({ supplierId: supplier.id, archived: deactivate, supplierName: supplier.name })
+    onClose()
+  }
+
+  return (
+    <div
+      className="modal-backdrop"
+      style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15, 23, 42, 0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={onClose}
+    >
+      <section
+        className="modal-card"
+        style={{ background: '#ffffff', width: '100%', maxWidth: 460, borderRadius: 16, border: '1px solid #e2e8f0', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}
+        onClick={event => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={needsDeactivateFallback ? 'Deactivate supplier' : 'Delete supplier'}
+      >
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 24px', borderBottom: '1px solid #f1f5f9', background: '#fff1f2' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Icon name="close" size={18} />
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#9f1239' }}>
+              {needsDeactivateFallback ? 'Cannot Delete — Deactivate Supplier?' : 'Delete Supplier'}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close delete supplier modal"
+            style={{ background: 'transparent', border: 0, padding: 4, cursor: 'pointer', color: '#64748b', display: 'flex', borderRadius: 6 }}
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </header>
+
+        <div style={{ padding: '20px 24px', fontSize: 14, color: '#334155', lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <p style={{ margin: 0 }}>
+            {needsDeactivateFallback
+              ? <><strong>{supplier.name}</strong> has existing purchases, payments, or an opening/outstanding balance. To keep your accounting and khata accurate, it cannot be permanently deleted.</>
+              : <>Are you sure you want to permanently delete <strong>{supplier.name}</strong>? This action cannot be undone.</>}
+          </p>
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', fontSize: 14, display: 'grid', gap: 4 }}>
+            <div>Total Purchases: <strong>{money(supplier.totalPurchasesRupees)}</strong></div>
+            <div>Total Paid: <strong>{money(supplier.totalPaidRupees)}</strong></div>
+            <div>Outstanding Balance: <strong>{money(supplier.outstandingRupees)}</strong></div>
+          </div>
+          {error && <p className="inline-error" style={{ margin: 0, fontSize: 14 }}>{error}</p>}
+        </div>
+
+        <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '14px 24px', borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+          <button
+            type="button"
+            className="secondary-btn"
+            style={{ padding: '9px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600 }}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          {needsDeactivateFallback ? (
+            supplier.status === 'Inactive' ? (
+              <span style={{ padding: '9px 14px', fontSize: 14, fontWeight: 600, color: '#64748b' }}>Already Inactive</span>
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleConfirm(true)}
+                style={{ padding: '9px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600, background: '#b45309', color: '#ffffff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer' }}
+              >
+                {busy ? 'Deactivating...' : 'Deactivate Supplier'}
+              </button>
+            )
+          ) : (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void handleConfirm(false)}
+              style={{ padding: '9px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600, background: '#be123c', color: '#ffffff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer' }}
+            >
+              {busy ? 'Deleting...' : 'Delete Permanently'}
+            </button>
+          )}
+        </footer>
+      </section>
+    </div>
+  )
+}
+
 function SuppliersScreen({ onNavigate }: { onNavigate: (page: string) => void }) {
   const { suppliers, purchases, supplierPayments, supplierLedger } = useRetailData()
   const [selectedId, setSelectedId] = useState(suppliers[0]?.id ?? '')
@@ -1058,13 +1190,16 @@ function SuppliersScreen({ onNavigate }: { onNavigate: (page: string) => void })
   const [showAddModal, setShowAddModal] = useState(false)
   const [showLifetimePurchases, setShowLifetimePurchases] = useState(false)
   const [payingSupplier, setPayingSupplier] = useState<SupplierRecord | null>(null)
+  const [deletingSupplier, setDeletingSupplier] = useState<SupplierRecord | null>(null)
+  const [notice, setNotice] = useState('')
 
   useEscapeKey(() => {
     setShowPayment(false)
     setShowAddModal(false)
     setPayingSupplier(null)
+    setDeletingSupplier(null)
     setShowLifetimePurchases(false)
-  }, showPayment || showAddModal || Boolean(payingSupplier) || showLifetimePurchases)
+  }, showPayment || showAddModal || Boolean(payingSupplier) || Boolean(deletingSupplier) || showLifetimePurchases)
 
   const selected = suppliers.find(supplier => supplier.id === selectedId) ?? suppliers[0]
   const selectedPurchases = useMemo(
@@ -1107,6 +1242,34 @@ function SuppliersScreen({ onNavigate }: { onNavigate: (page: string) => void })
         </button>
       </div>
       <RetailDataStatus />
+      {notice && (
+        <div
+          role="status"
+          style={{
+            marginBottom: 14,
+            padding: '10px 16px',
+            borderRadius: 10,
+            background: '#ecfdf5',
+            border: '1px solid #a7f3d0',
+            color: '#065f46',
+            fontSize: 14,
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span>{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice('')}
+            style={{ background: 'transparent', border: 0, color: '#065f46', fontWeight: 700, cursor: 'pointer' }}
+            aria-label="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <SupplierStats suppliers={suppliers} />
       <div className="customers-layout">
         <SuppliersTable
@@ -1115,6 +1278,10 @@ function SuppliersScreen({ onNavigate }: { onNavigate: (page: string) => void })
           onSelect={setSelectedId}
           onPaySupplier={handlePaySupplier}
           onNewPurchase={() => onNavigate('Purchases')}
+          onDeleteSupplier={supplier => {
+            setNotice('')
+            setDeletingSupplier(supplier)
+          }}
         />
         <aside className="customers-side">
           {selected && (
@@ -1149,6 +1316,20 @@ function SuppliersScreen({ onNavigate }: { onNavigate: (page: string) => void })
           supplier={selected}
           purchases={selectedPurchases}
           onClose={() => setShowLifetimePurchases(false)}
+        />
+      )}
+      {deletingSupplier && (
+        <DeleteSupplierModal
+          supplier={deletingSupplier}
+          onClose={() => setDeletingSupplier(null)}
+          onDeleted={({ supplierId, archived, supplierName }) => {
+            if (!archived && selectedId === supplierId) setSelectedId('')
+            setNotice(
+              archived
+                ? `Supplier "${supplierName}" deactivated (financial records preserved).`
+                : `Supplier "${supplierName}" deleted permanently.`
+            )
+          }}
         />
       )}
     </motion.main>
