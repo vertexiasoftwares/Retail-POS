@@ -123,12 +123,15 @@ export class LicenseClient {
   async activate(key: unknown, reauthorize = () => {}) {
     if (typeof key !== 'string') return Promise.reject(new Error('Enter the activation key supplied by the company.'))
     const normalized = key.trim().toUpperCase()
-    if (/^MK-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalized) && this.options.cloudClient) {
+    if (/^MK-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalized)) {
+      return Promise.reject(new Error('Pharmacy license keys (MK-...) cannot activate Vertexia Retail POS. Use a Retail POS (VR-...) license key.'))
+    }
+    if (/^VR-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalized) && this.options.cloudClient) {
       const res = await this.options.cloudClient.activate(normalized)
       reauthorize()
       return { message: res.message || 'Retail POS license activated successfully.' }
     }
-    if (!/^VTX-[A-F0-9]{48}$/.test(normalized)) return Promise.reject(new Error('Enter a valid license key (e.g. MK-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX).'))
+    if (!/^VTX-[A-F0-9]{48}$/.test(normalized)) return Promise.reject(new Error('Enter a valid Retail POS license key (e.g. VR-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX).'))
     return this.exchange('activate', normalized, reauthorize)
   }
   async refresh(reauthorize = () => {}) {

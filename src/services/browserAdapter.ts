@@ -48,6 +48,7 @@ export function createBrowserAdapter(): VertexiaDesktopApi {
         break;
       case 'branch:created':
       case 'branch:updated':
+      case 'counter:revoked':
         window.dispatchEvent(new Event('vertexia:auth-refresh'));
         break;
     }

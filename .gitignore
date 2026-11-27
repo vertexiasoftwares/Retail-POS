@@ -30,8 +30,16 @@ dist-ssr
 # Local UI verification screenshots
 .screenshots/
 
-# Company secrets stay outside customer builds and version control.
+# Company secrets & environment files stay outside customer builds and version control.
+.env
+.env.*
+!.env.example
 .company-licensing/
 *-private.pem
 .company-backups/
 .releases/
+backups/
+cloud-dist/
+server-dist/
+installer-dist/
+dist-inno/

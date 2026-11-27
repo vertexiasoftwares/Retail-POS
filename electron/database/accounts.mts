@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type { CustomerCollectRequest, CustomerCreateRequest, CustomerDetail, CustomerQuery, CustomerReceipt, CustomerRecord, CustomerSnapshot, CustomerUpdateRequest, ExpensePostRequest, ExpenseQuery, ExpenseRecord, ExpenseReverseRequest, ExpenseSnapshot } from '../../src/types/accounts.js'
+import { getActiveCounterId } from './context.mjs'
 import { postOperation, requireBusinessDate, requireSafeInteger, requireText } from './posting.mjs'
 import { retailBusinessDate } from './retail.mjs'
+import { enqueueOutboxEvent } from '../sync/outbox.mjs'
 
 type Row = Record<string, string | number | null>
 const methods = new Set(['Cash', 'Bank Transfer', 'JazzCash', 'Easypaisa', 'Card'])
@@ -114,9 +116,28 @@ export class AccountsRepository {
     return postOperation(this.db, request.branchId, request.operationId, 'customer.create', request, this.now().toISOString(), () => {
       this.branch(request.branchId)
       const customerId = id('customer'), time = this.now().toISOString()
-      this.db.prepare('INSERT INTO customers VALUES (?,?,?,?,?,?,?)').run(customerId, this.businessId, name, phone || null, 0, 1, time)
+      this.db.prepare('INSERT INTO customers(id,business_id,name,phone,is_walk_in,is_active,created_at) VALUES (?,?,?,?,?,?,?)').run(customerId, this.businessId, name, phone || null, 0, 1, time)
       if (opening) this.db.prepare('INSERT INTO customer_ledger VALUES (?,?,?,?,?,?,?,?)').run(id('customer-ledger'), request.branchId, customerId, 'opening_balance', opening, 0, customerId, time)
       this.audit(request.branchId, 'Customer', customerId, 'Customer created', `Opening debt paisa: ${opening}`, time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'customer',
+        entityId: customerId,
+        operation: 'upsert',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id: customerId,
+          businessId: this.businessId,
+          branchId: request.branchId,
+          name,
+          phone: phone || '',
+          isWalkIn: false,
+          isActive: true,
+          openingBalancePaisa: opening,
+          syncVersion: 1,
+          createdAt: time,
+        },
+      })
       return { customerId }
     })
   }
@@ -128,7 +149,26 @@ export class AccountsRepository {
       this.branch(request.branchId); this.customer(request.customerId)
       const time = this.now().toISOString()
       this.db.prepare('UPDATE customers SET name=?,phone=?,is_active=? WHERE id=?').run(name, phone || null, request.isActive ? 1 : 0, request.customerId)
+      this.db.prepare("INSERT INTO entity_sync_state(entity_type,entity_id,sync_version) VALUES ('customer',?,2) ON CONFLICT(entity_type,entity_id) DO UPDATE SET sync_version=sync_version+1").run(request.customerId)
+      const ver = Number((this.db.prepare("SELECT sync_version FROM entity_sync_state WHERE entity_type='customer' AND entity_id=?").get(request.customerId) as Row | undefined)?.sync_version ?? 1)
       this.audit(request.branchId, 'Customer', request.customerId, 'Customer details updated', request.isActive ? 'Active' : 'Inactive', time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'customer',
+        entityId: request.customerId,
+        operation: 'upsert',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id: request.customerId,
+          businessId: this.businessId,
+          branchId: request.branchId,
+          name,
+          phone: phone || '',
+          isWalkIn: false,
+          isActive: request.isActive,
+          syncVersion: ver,
+        },
+      })
       return { customerId: request.customerId }
     })
   }
@@ -146,6 +186,25 @@ export class AccountsRepository {
       this.db.prepare('INSERT INTO customer_ledger VALUES (?,?,?,?,?,?,?,?)').run(id('customer-ledger'), request.branchId, request.customerId, 'payment', 0, amount, receiptId, time)
       if (request.method === 'Cash') this.cash(request.branchId, 'customer_payment', 'in', amount, receiptId, time)
       this.audit(request.branchId, 'Customer Payment', receiptId, 'Customer debt payment received', number, time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'customer_receipt',
+        entityId: receiptId,
+        operation: 'create',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id: receiptId,
+          branchId: request.branchId,
+          customerId: request.customerId,
+          receiptNumber: number,
+          businessDate: date,
+          method: request.method,
+          amountPaisa: amount,
+          note: reference,
+          createdBy: this.actor(),
+          occurredAt: time,
+        },
+      })
       return this.receipt(request.branchId, receiptId)
     })
   }
@@ -201,6 +260,26 @@ export class AccountsRepository {
       this.db.prepare('INSERT INTO expense_postings VALUES (?,?,?,?)').run(expenseId, number, reference, this.actor())
       if (request.method === 'Cash') this.cash(request.branchId, 'expense', 'out', amount, expenseId, time)
       this.audit(request.branchId, 'Expense', expenseId, 'Paid expense posted', number, time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'expense',
+        entityId: expenseId,
+        operation: 'create',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id: expenseId,
+          branchId: request.branchId,
+          expenseNumber: number,
+          businessDate: date,
+          category,
+          description,
+          method: request.method,
+          amountPaisa: amount,
+          note: reference,
+          createdBy: this.actor(),
+          occurredAt: time,
+        },
+      })
       return { expenseId, number }
     })
   }
@@ -219,6 +298,27 @@ export class AccountsRepository {
       this.db.prepare('INSERT INTO expense_reversals VALUES (?,?,?,?,?,?,?,?)').run(reversalId, request.expenseId, request.branchId, number, date, reason, this.actor(), time)
       if (expense.payment_method === 'Cash') this.cash(request.branchId, 'expense_reversal', 'in', safe(expense.amount_paisa), reversalId, time)
       this.audit(request.branchId, 'Expense Reversal', reversalId, reason, number, time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'expense',
+        entityId: reversalId,
+        operation: 'reverse',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id: reversalId,
+          originalExpenseId: request.expenseId,
+          branchId: request.branchId,
+          expenseNumber: number,
+          businessDate: date,
+          category: String(expense.category),
+          description: String(expense.description),
+          method: String(expense.payment_method),
+          amountPaisa: -safe(expense.amount_paisa),
+          note: reason,
+          createdBy: this.actor(),
+          occurredAt: time,
+        },
+      })
       return { reversalId, number }
     })
   }

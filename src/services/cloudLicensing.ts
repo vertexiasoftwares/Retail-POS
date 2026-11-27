@@ -235,6 +235,7 @@ export async function registerRetailBusiness(input: CloudRegistrationInput): Pro
       email: input.email || '',
       city: input.city,
       businessType: input.businessType || 'Retail Mart / POS',
+      product: 'retail-pos',
     })
     registeredOnline = true
     window.dispatchEvent(new CustomEvent('vertexia:license-changed'))
@@ -255,52 +256,55 @@ export async function registerRetailBusiness(input: CloudRegistrationInput): Pro
 
 export async function activateRetailLicense(key: string, businessId?: string): Promise<CloudLicenseStatusOutput> {
   const normalizedKey = key.trim().toUpperCase()
-  if (!/^MK-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalizedKey)) {
-    throw new Error('Invalid key format. Expected format: MK-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX')
+  if (/^MK-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalizedKey)) {
+    throw new Error('Pharmacy license keys (MK-...) cannot activate Vertexia Retail POS. Use a Retail POS (VR-...) key.')
+  }
+  if (!/^VR-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalizedKey)) {
+    throw new Error('Invalid key format. Expected format: VR-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX')
   }
 
   const reg = getStoredRegistration()
   const targetBizId = businessId || reg?.businessId || getRegistrationIdentity().businessId
 
-  // Attempt Electron IPC activation
+  // Attempt Electron IPC / Local LAN Server activation
   if (window.vertexia?.cloudLicense) {
-    try {
-      const result = await window.vertexia.cloudLicense.activate(normalizedKey, targetBizId)
-      window.dispatchEvent(new CustomEvent('vertexia:license-changed'))
-      return result
-    } catch (err: any) {
-      console.warn('Electron cloud license activation error:', err.message)
-    }
+    const result = await window.vertexia.cloudLicense.activate(normalizedKey, targetBizId)
+    window.dispatchEvent(new CustomEvent('vertexia:license-changed'))
+    return result
   }
 
-  // Direct WebCrypto activation to Supabase
-  try {
-    const cloudResult = await postDirectCloudApi('activate', {
-      businessId: targetBizId,
-      key: normalizedKey,
-      deviceName: 'Retail POS Terminal',
-    })
-    const activeSnapshot: CloudLicenseStatusOutput = {
-      status: 'ACTIVE',
-      accessAllowed: true,
-      businessId: targetBizId,
-      license_id: normalizedKey,
-      license_type: 'PERMANENT',
-      expires_at: null,
-      offline_until: new Date(Date.now() + 365 * 86400000).toISOString(),
-      last_verified_at: new Date().toISOString(),
-      message: 'License verified & activated.',
-      contact: cloudResult?.contact || DEFAULT_CONTACT,
-      deviceId: getRegistrationIdentity().deviceIdentifier,
-      registration: reg,
-    }
-    localStorage.setItem('vertexia_cloud_license', JSON.stringify(activeSnapshot))
-    window.dispatchEvent(new CustomEvent('vertexia:license-changed'))
-    return activeSnapshot
-  } catch (directErr: any) {
-    console.error('Direct cloud activation error:', directErr)
-    throw directErr
+  // Direct WebCrypto activation to cloud licensing server
+  const cloudResult = await postDirectCloudApi('activate', {
+    businessId: targetBizId,
+    key: normalizedKey,
+    product: 'retail-pos',
+    deviceName: 'Retail POS Terminal',
+  })
+  const receiptBody = typeof cloudResult?.receipt === 'string' ? cloudResult.receipt.split('.')[0] : ''
+  const claims = receiptBody
+    ? JSON.parse(atob(receiptBody.replace(/-/g, '+').replace(/_/g, '/')))
+    : null
+  if (!claims || claims.product !== 'retail-pos' || claims.status !== 'ACTIVE') {
+    throw new Error('License receipt could not be verified for Vertexia Retail POS.')
   }
+  const permanent = claims.permanent === true && claims.expiresAt === null
+  const activeSnapshot: CloudLicenseStatusOutput = {
+    status: 'ACTIVE',
+    accessAllowed: true,
+    businessId: claims.businessId || targetBizId,
+    license_id: claims.licenseId || normalizedKey,
+    license_type: permanent ? 'PERMANENT' : 'DATED',
+    expires_at: permanent ? null : new Date(claims.expiresAt).toISOString(),
+    offline_until: claims.offlineUntil ? new Date(claims.offlineUntil).toISOString() : null,
+    last_verified_at: new Date().toISOString(),
+    message: 'License verified & activated.',
+    contact: cloudResult?.contact || DEFAULT_CONTACT,
+    deviceId: getRegistrationIdentity().deviceIdentifier,
+    registration: reg,
+  }
+  localStorage.setItem('vertexia_cloud_license', JSON.stringify(activeSnapshot))
+  window.dispatchEvent(new CustomEvent('vertexia:license-changed'))
+  return activeSnapshot
 }
 
 export async function refreshRetailLicense(): Promise<CloudLicenseStatusOutput> {
@@ -316,7 +320,7 @@ export async function refreshRetailLicense(): Promise<CloudLicenseStatusOutput> 
   const targetBizId = reg?.businessId || getRegistrationIdentity().businessId
 
   try {
-    await postDirectCloudApi('refresh', { businessId: targetBizId })
+    await postDirectCloudApi('refresh', { businessId: targetBizId, product: 'retail-pos' })
     window.dispatchEvent(new CustomEvent('vertexia:license-changed'))
   } catch {}
 

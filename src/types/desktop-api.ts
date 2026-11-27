@@ -139,6 +139,7 @@ export type PosCompleteSaleRequest = {
   lines: PosCartLineInput[]
   paymentMethod: PosPaymentMethod
   cashReceivedPaisa: number
+  counterId?: string
 }
 
 export type PosCompletedSale = {
@@ -516,6 +517,8 @@ export type SupportInfo = {
   licenseExpiryDate: string | null
   deviceId: string
   shopName: string
+  lanUrl?: string
+  lanPort?: number
 }
 
 export type DesktopWindowState = {

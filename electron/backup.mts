@@ -7,6 +7,7 @@ import { migrations } from './database/schema.mjs'
 import { verifyBackupOwner } from './database/auth.mjs'
 import type { VertexiaDatabase } from './database/database.mjs'
 import type { BackupRecord, BackupRestoreRequest, BackupStatus, BackupSummary } from '../src/types/recovery.js'
+import { appendSyncLog, incrementSyncEpoch, recoverInterruptedOutbox } from './sync/outbox.mjs'
 
 type Row = Record<string, string | number | null>
 type Candidate = { path: string; ownerId: string; expiresAt: number; summary: BackupSummary }
@@ -204,6 +205,18 @@ export class BackupService {
         hooks.close(); closed = true
         await (hooks.install ?? backup)(source, this.databasePath)
         hooks.reopen(); closed = false
+        try {
+          const reopened = this.getDatabase().connection
+          const hasSyncState = reopened.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_state'").get()
+          if (hasSyncState) {
+            const nowIso = this.now().toISOString()
+            const nextEpoch = incrementSyncEpoch(reopened, nowIso)
+            recoverInterruptedOutbox(reopened, nowIso)
+            appendSyncLog(reopened, 'system', 'ok', 0, `Snapshot restored; sync_epoch rotated to ${nextEpoch}`, nowIso)
+          }
+        } catch {
+          // Older v7-v15 snapshots without sync tables restore normally without failing recovery
+        }
         restored = true
         return { safetyBackupPath: safety.path }
       } catch (error) {

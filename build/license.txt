@@ -1,0 +1,155 @@
+VERTEXIA RETAIL POS - END USER LICENCE AGREEMENT
+
+VERTEXIA
+Last updated: 2026-11-26
+
+Please read this before installing. Installing or using VERTEXIA RETAIL POS means you accept
+this agreement. If you do not accept it, do not install the software.
+
+This agreement is written in plain English on purpose. It is meant to be read.
+
+
+1. WHAT YOU ARE GETTING
+
+VERTEXIA RETAIL POS is retail point-of-sale software installed on your Windows computer.
+It runs your store billing, inventory, purchases, suppliers, customers, cash shifts,
+expenses and reports with a local SQLite database and also opens a local network (LAN)
+web interface so additional counters in the same shop can connect over the shop Wi-Fi
+or network.
+
+We licence this software to you. We do not sell it to you. You may use it, but
+you do not own it.
+
+
+2. ONE LICENCE, ONE SITE
+
+A licence covers one site - one business location. Its installation allowance and
+validity are configured by Vertexia for that registration. LAN counters on the same
+local network use authorised store accounts and their assigned permissions.
+
+If you run a second location, that needs a second licence.
+
+A licence is tied to the installation it is activated on. If you replace the
+computer, contact us and we will move the licence across at no charge.
+
+
+3. REGISTRATION AND ACTIVATION
+
+When installing on a new computer where no store account exists yet, first launch
+opens the Store Registration screen so you can register your shop and create your
+Owner login. Installing over an existing installation preserves your store data
+and existing user accounts.
+
+Licences may have an expiry date or be permanent. A permanent licence has no
+scheduled expiry date; it remains subject to Vertexia's suspension and installation
+controls. An expired, suspended or released installation requires renewal or
+company authorisation before normal transactions can resume.
+
+Licence expiry or suspension does not itself delete your shop records.
+
+
+4. WHAT YOU MAY NOT DO
+
+You may not:
+
+  - copy the software to another site or business, or sell, rent, sub-licence
+    or give it away
+  - work around, disable or tamper with licence checking or installation limits
+  - reverse-engineer, decompile or disassemble the software, except where the
+    law explicitly gives you that right despite this clause
+  - remove or alter our name, logos or notices
+
+
+5. YOUR DATA IS YOURS
+
+Every product, stock record, bill, customer account, supplier ledger, expense and
+staff account you put into VERTEXIA RETAIL POS belongs to you. Not to us.
+
+The normal local database directory is:
+%APPDATA%\vertexia-retail-pos\data
+
+All user data stays outside the program installation folder. Uninstalling the
+application removes program files while preserving your local database and backups.
+
+Keeping verified recovery backups remains your responsibility. VERTEXIA RETAIL POS
+includes backup and export tools; using them is up to you. We cannot recover data
+from a machine that has failed and was never backed up.
+
+
+6. WHAT WE COLLECT
+
+Registration and licence verification transmit only the required business/contact
+details, installation identifiers and licence status information to the licensing
+service. Passwords are stored securely hashed and never in plain text.
+
+Customer bills, inventory quantities, prices and supplier ledgers remain locally in
+your shop database.
+
+
+7. UPDATES
+
+We may release updates that fix problems, improve the software, or adapt it to
+changes in Windows. Updates are covered by this same agreement.
+
+We are not obliged to keep releasing updates forever, and we may retire an old
+version if we can no longer support it safely.
+
+
+8. SUPPORT
+
+Support terms, response times and contact channels (Phone / WhatsApp) are provided
+in your arrangement with Vertexia and shown in the Help Guide inside the app.
+Support is not covered by this agreement.
+
+
+9. NO WARRANTY
+
+We test this software for real retail shops, kiryana stores and mini marts. But we
+provide it "as is". We do not promise that it will be free of faults, that it will
+never be interrupted, or that it will suit a particular way of working.
+
+You are responsible for deciding whether VERTEXIA RETAIL POS is right for your
+business, and for keeping a way to take payment if any computer system fails.
+
+
+10. LIMITS ON WHAT WE OWE YOU
+
+To the extent the law allows, we are not liable for lost profit, lost sales,
+lost or corrupted data, business interruption, or any indirect or consequential
+loss.
+
+Where we are found liable despite the above, our total liability is limited to
+what you paid us for the licence in the twelve months before the claim.
+
+Nothing in this agreement limits liability for death or personal injury caused
+by negligence, for fraud, or for anything else the law does not permit us to
+limit.
+
+
+11. ENDING THIS AGREEMENT
+
+This agreement runs until it ends.
+
+You can end it at any time by uninstalling the software.
+
+We can end it if you seriously breach it - for example by copying the software
+to other sites or by defeating licence checking - and you do not put it right
+within 30 days of us telling you about it.
+
+When it ends you must stop using VERTEXIA RETAIL POS and uninstall it. You keep
+your data; uninstalling removes application files and preserves the local shop
+database and backups stored outside the application directory.
+
+Sections 5, 9, 10 and 12 survive the end of this agreement.
+
+
+12. GOVERNING LAW
+
+This agreement is governed by the laws of Pakistan, and the courts of Pakistan
+have exclusive jurisdiction.
+
+
+13. THE WHOLE AGREEMENT
+
+This is the entire agreement between us about VERTEXIA RETAIL POS and it replaces
+anything written or said before it.

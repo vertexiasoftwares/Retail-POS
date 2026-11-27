@@ -11,5 +11,5 @@
     "sourceMap": true,
     "declaration": false
   },
-  "include": ["**/*.mts", "../electron/backup.mts", "../electron/database/**/*.mts", "../src/types/desktop-api.ts"]
+  "include": ["**/*.mts", "../electron/backup.mts", "../electron/database/**/*.mts", "../electron/sync/**/*.mts", "../src/types/desktop-api.ts"]
 }

@@ -494,6 +494,12 @@ export default function HelpCenterPage(props: PageProps) {
                 <dt style={{ color: '#475569', fontWeight: 600 }}>{t.fieldOs}</dt>
                 <dd style={{ margin: '2px 0 0', fontWeight: 700, color: '#0f172a' }}>{supportInfo.os}</dd>
               </div>
+              {supportInfo.lanUrl && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <dt style={{ color: '#475569', fontWeight: 600 }}>Other PCs / LAN Access (Port {supportInfo.lanPort ?? 8080})</dt>
+                  <dd style={{ margin: '2px 0 0', fontWeight: 700, color: '#5E0CF3', userSelect: 'all' }}>{supportInfo.lanUrl}</dd>
+                </div>
+              )}
             </dl>
 
             <div style={{ marginTop: 12, fontSize: 14, color: '#475569' }}>

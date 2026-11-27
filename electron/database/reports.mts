@@ -2,6 +2,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
 import type {
   ReportCategoryPoint,
   ReportColumn,
+  ReportCounterSale,
   ReportExpenseCategory,
   ReportQuery,
   ReportRecentSale,
@@ -220,6 +221,37 @@ export class ReportsRepository {
         category:String(row.category),
         netPaisa:signed(row.net,'Expense category total'),
       }))
+      const byCounter: ReportCounterSale[] = (this.db.prepare(`SELECT
+        COALESCE(c.id, COALESCE(t.cid, 'counter-1')) AS counter_id,
+        COALESCE(c.counter_number, 1) AS counter_number,
+        COALESCE(c.name, COALESCE(t.cid, 'Counter 1 (Main PC)')) AS name,
+        SUM(t.inv_count) AS invoice_count,
+        SUM(t.sales_paisa) AS sales_paisa,
+        SUM(t.returns_paisa) AS returns_paisa,
+        SUM(t.sales_paisa) - SUM(t.returns_paisa) AS net_sales_paisa
+        FROM (
+          SELECT COALESCE(ca.counter_id, 'counter-1') AS cid, 1 AS inv_count, s.total_paisa AS sales_paisa, 0 AS returns_paisa
+          FROM sales s LEFT JOIN counter_attributions ca ON ca.entity_type='sale' AND ca.entity_id=s.id
+          WHERE s.status!='voided' AND s.branch_id IN ${inSql} AND s.business_date BETWEEN ? AND ?
+          UNION ALL
+          SELECT COALESCE(ca.counter_id, cas.counter_id, 'counter-1') AS cid, 0 AS inv_count, 0 AS sales_paisa, r.total_paisa AS returns_paisa
+          FROM sale_returns r JOIN sales s ON s.id=r.sale_id
+          LEFT JOIN counter_attributions ca ON ca.entity_type='sale_return' AND ca.entity_id=r.id
+          LEFT JOIN counter_attributions cas ON cas.entity_type='sale' AND cas.entity_id=s.id
+          WHERE r.branch_id IN ${inSql} AND date(r.occurred_at,'+5 hours') BETWEEN ? AND ?
+          UNION ALL
+          SELECT COALESCE(ca.counter_id, 'counter-1') AS cid, 0 AS inv_count, 0 AS sales_paisa, mr.total_paisa AS returns_paisa
+          FROM manual_returns mr LEFT JOIN counter_attributions ca ON ca.entity_type='manual_return' AND ca.entity_id=mr.id
+          WHERE mr.branch_id IN ${inSql} AND mr.business_date BETWEEN ? AND ?
+        ) t LEFT JOIN counters c ON c.id=t.cid GROUP BY counter_id, counter_number, name ORDER BY counter_number ASC, net_sales_paisa DESC`).all(...period, ...period, ...period) as Row[]).map(row => ({
+        counterId: String(row.counter_id),
+        counterNumber: Number(row.counter_number),
+        name: String(row.name),
+        invoiceCount: requireSafeInteger(Number(row.invoice_count), 'Counter invoices'),
+        salesPaisa: requireSafeInteger(Number(row.sales_paisa), 'Counter sales'),
+        returnsPaisa: requireSafeInteger(Number(row.returns_paisa), 'Counter returns'),
+        netSalesPaisa: signed(row.net_sales_paisa, 'Counter net sales'),
+      }))
       const stockSummary=this.stockSummary(ids)
       const inTransitValuePaisa=value(`SELECT COALESCE(SUM(i.cost_paisa),0) AS value FROM stock_transfer_items i JOIN stock_transfers t ON t.id=i.transfer_id WHERE t.source_branch_id IN ${inSql} AND t.status='dispatched'`,ids)
       const summary={...stockSummary,inTransitValuePaisa,inventoryValuePaisa:stockSummary.valuePaisa+inTransitValuePaisa,salesPaisa,returnsPaisa,netSalesPaisa,costPaisa,grossProfitPaisa,expensesPaisa,operatingProfitPaisa:grossProfitPaisa-expensesPaisa,purchasesPaisa:sum('purchases','total_paisa'),collectionsPaisa:sum('customer_receipts','amount_paisa'),supplierPaymentsPaisa:sum('supplier_payments','amount_paisa'),customerDuePaisa:balance('customer_ledger',true),customerCreditPaisa:balance('customer_ledger',false),supplierDuePaisa:balance('supplier_ledger',true),supplierCreditPaisa:balance('supplier_ledger',false),
@@ -227,7 +259,7 @@ export class ReportsRepository {
         stockAdjustmentCostPaisa:value(`SELECT COALESCE(SUM(v.cost_delta_paisa),0) AS value FROM stock_value_movements v JOIN stock_movements m ON m.id=v.movement_id WHERE m.branch_id IN ${inSql} AND date(m.occurred_at,'+5 hours') BETWEEN ? AND ? AND m.reference_type='stock_adjustment'`),
         invoiceCount,itemsSoldMilli,averageInvoicePaisa,newCustomersCount}
       for(const amount of Object.values(summary)) if(!Number.isSafeInteger(amount))throw new Error('Report total exceeds the supported range.')
-      const result={businessName:String(this.db.prepare('SELECT name FROM businesses WHERE id=?').get(this.businessId)!.name),branchNames:(this.db.prepare(`SELECT name FROM branches WHERE id IN ${inSql} ORDER BY name`).all(...ids) as Row[]).map(row=>String(row.name)),dateFrom:query.dateFrom,dateTo:query.dateTo,generatedAt:this.now().toISOString(),summary,payments,salesTrend,categorySales,topProducts,staffSales,recentSales,expenseByCategory,table:this.table(query,ids)}
+      const result={businessName:String(this.db.prepare('SELECT name FROM businesses WHERE id=?').get(this.businessId)!.name),branchNames:(this.db.prepare(`SELECT name FROM branches WHERE id IN ${inSql} ORDER BY name`).all(...ids) as Row[]).map(row=>String(row.name)),dateFrom:query.dateFrom,dateTo:query.dateTo,generatedAt:this.now().toISOString(),summary,payments,salesTrend,categorySales,topProducts,staffSales,recentSales,expenseByCategory,byCounter,table:this.table(query,ids)}
       this.db.exec('COMMIT');return result
     } catch(error){this.db.exec('ROLLBACK');throw error}
   }

@@ -1,0 +1,32 @@
+{
+  "appId": "com.vertexia.retailpos",
+  "productName": "Vertexia Retail POS",
+  "asar": false,
+  "directories": {
+    "output": "installer-dist"
+  },
+  "files": [
+    "dist/**/*",
+    "electron-dist/**/*",
+    "server-dist/**/*",
+    "public/retail-pos-icon.ico",
+    "public/retail-pos-icon.png",
+    "package.json",
+    "!cloud-server/**",
+    "!cloud-dist/**",
+    "!.env*",
+    "!docker-compose.yml",
+    "!**/*.map",
+    "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+    "!**/node_modules/.bin"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "dir",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "public/retail-pos-icon.ico"
+  }
+}

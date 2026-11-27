@@ -34,6 +34,23 @@ export function registerPosRoutes(
     }
   });
 
+  // GET /api/pos/delta?branchId=...&since=...
+  app.get('/api/pos/delta', async (request, reply) => {
+    const query = request.query as { branchId?: string; since?: string };
+    const branchId = query.branchId;
+    if (!branchId) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'A branch is required.', statusCode: 400 });
+    }
+    const guarded = enforceAuth(request, reply, auth, db, 'pos.sell', branchId);
+    if (!guarded) return;
+
+    try {
+      return db.getPosDelta(branchId, query.since);
+    } catch (err: any) {
+      return reply.status(400).send({ error: 'PosError', message: err?.message || 'Failed to load POS delta.', statusCode: 400 });
+    }
+  });
+
   // POST /api/pos/sale
   app.post('/api/pos/sale', async (request, reply) => {
     const body = request.body as PosCompleteSaleRequest | undefined;
@@ -51,9 +68,10 @@ export function registerPosRoutes(
     }
 
     try {
-      const scopedBody = ensureOperationId(body, guarded.session.userId);
-      const completed = db.completePosSale(scopedBody);
-      // Broadcast real-time event to other counter PCs
+      const scopedBody = ensureOperationId(body, guarded.session.userId, guarded.counterId);
+      const completed = db.completePosSale({ ...scopedBody, counterId: guarded.counterId });
+      const productIds = Array.isArray(body.lines) ? body.lines.map(l => l.productId) : [];
+      // Broadcast real-time delta event to other counter PCs
       sync?.broadcast({
         type: 'sale:completed',
         branchId: body.branchId,
@@ -63,12 +81,18 @@ export function registerPosRoutes(
           invoiceNumber: completed.invoiceNumber,
           totalPaisa: completed.totalPaisa,
           paymentMethod: completed.paymentMethod,
+          counterId: guarded.counterId,
+          productIds,
         },
       });
       sync?.broadcast({
         type: 'inventory:changed',
         branchId: body.branchId,
         businessId: guarded.session.businessId,
+        payload: {
+          counterId: guarded.counterId,
+          productIds,
+        },
       });
       return completed;
     } catch (err: any) {
@@ -147,13 +171,14 @@ export function registerPosRoutes(
     if (!guarded) return;
 
     try {
-      const scopedBody = ensureOperationId(body, guarded.session.userId);
-      const shiftId = db.openPosShift(body.branchId, body.openingCashPaisa, scopedBody.operationId, body.note, body.counterId);
+      const scopedBody = ensureOperationId(body, guarded.session.userId, guarded.counterId);
+      const effectiveCounter = body.counterId?.trim() || guarded.counterId;
+      const shiftId = db.openPosShift(body.branchId, body.openingCashPaisa, scopedBody.operationId, body.note, effectiveCounter);
       sync?.broadcast({
         type: 'shift:opened',
         branchId: body.branchId,
         businessId: guarded.session.businessId,
-        payload: { shiftId, cashierId: guarded.session.userId, counterId: body.counterId || 'Counter 1' },
+        payload: { shiftId, cashierId: guarded.session.userId, counterId: effectiveCounter },
       });
       return { shiftId };
     } catch (err: any) {

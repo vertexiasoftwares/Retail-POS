@@ -20,6 +20,11 @@ import { registerRetailRoutes } from './routes/retail.mjs'
 import { registerReportsRoutes } from './routes/reports.mjs'
 import { registerBranchesRoutes } from './routes/branches.mjs'
 import { registerSystemRoutes } from './routes/system.mjs'
+import { registerCounterRoutes } from './routes/counters.mjs'
+import { registerSyncRoutes, type SyncController } from './routes/sync.mjs'
+import type { LicenseClient } from '../electron/licensing/client.mjs'
+import type { CloudLicenseClient } from '../electron/licensing/cloudClient.mjs'
+import { resolveRequestCounterId } from './auth-guard.mjs'
 
 export const SESSION_COOKIE_NAME = 'vertexia_session'
 
@@ -89,6 +94,10 @@ export interface ServerOptions {
   auth?: AuthRepository
   backupService?: BackupService
   backupDirectory?: string
+  licenseClient?: LicenseClient
+  cloudLicenseClient?: CloudLicenseClient
+  syncController?: SyncController
+  requireCounterPairing?: boolean
   logger?: boolean | object
 }
 
@@ -178,11 +187,15 @@ export async function createServer(options: ServerOptions = {}): Promise<ServerI
     if (token) {
       const session = auth.authenticateToken(token, false)
       if (session) {
+        const headerCounter = resolveRequestCounterId(request, db, undefined, false) || 'counter-1'
+        const tokenCounter = auth.getTokenCounterId(token)
         requestActorStorage.enterWith({
           userId: session.userId,
           branchId: session.branchId,
           role: session.role,
           sessionToken: token,
+          counterId: headerCounter !== 'counter-1' ? headerCounter : tokenCounter,
+          ipAddress: request.ip,
         })
       }
     }
@@ -257,7 +270,9 @@ export async function createServer(options: ServerOptions = {}): Promise<ServerI
   registerRetailRoutes(app, db, auth, syncServer)
   registerReportsRoutes(app, db, auth, syncServer)
   registerBranchesRoutes(app, db, auth, syncServer)
-  registerSystemRoutes(app, db, auth, syncServer, backups)
+  registerSystemRoutes(app, db, auth, syncServer, backups, options.licenseClient, options.cloudLicenseClient)
+  registerCounterRoutes(app, db, auth, syncServer)
+  registerSyncRoutes(app, db, auth, options.syncController)
 
   // 7. Catch-all for undefined /api/* routes (returns structured JSON 404)
   app.all('/api/*', async (request, reply) => {

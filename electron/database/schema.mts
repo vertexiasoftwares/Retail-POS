@@ -608,4 +608,162 @@ export const migrations = [
         );
     `,
   },
+  {
+    version: 16,
+    sql: `
+      CREATE TABLE IF NOT EXISTS counters (
+        id TEXT PRIMARY KEY,
+        business_id TEXT NOT NULL REFERENCES businesses(id),
+        branch_id TEXT NOT NULL REFERENCES branches(id),
+        counter_number INTEGER NOT NULL CHECK(counter_number BETWEEN 1 AND 20),
+        name TEXT NOT NULL,
+        device_fingerprint TEXT,
+        device_token_hash TEXT UNIQUE,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','revoked')),
+        is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1)),
+        app_version TEXT,
+        last_ip TEXT,
+        last_seen_at TEXT,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT,
+        UNIQUE(branch_id, counter_number)
+      );
+      CREATE INDEX IF NOT EXISTS idx_counters_token ON counters(device_token_hash);
+      CREATE INDEX IF NOT EXISTS idx_counters_branch ON counters(branch_id, status);
+
+      CREATE TABLE IF NOT EXISTS counter_pairing_codes (
+        id TEXT PRIMARY KEY,
+        business_id TEXT NOT NULL REFERENCES businesses(id),
+        branch_id TEXT NOT NULL REFERENCES branches(id),
+        counter_id TEXT NOT NULL REFERENCES counters(id),
+        code_hash TEXT NOT NULL UNIQUE,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_pairing_expires ON counter_pairing_codes(expires_at);
+
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        branch_id TEXT NOT NULL REFERENCES branches(id),
+        counter_id TEXT REFERENCES counters(id),
+        credential_version INTEGER NOT NULL,
+        issued_at INTEGER NOT NULL,
+        touched_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        revoked_at TEXT,
+        ip_address TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, revoked_at);
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_counter ON auth_sessions(counter_id, revoked_at);
+
+      CREATE TABLE IF NOT EXISTS counter_attributions (
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('sale','sale_return','manual_return','held_sale')),
+        entity_id TEXT NOT NULL,
+        counter_id TEXT NOT NULL DEFAULT 'counter-1',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(entity_type, entity_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_counter_attr_counter ON counter_attributions(counter_id, entity_type);
+
+      INSERT OR IGNORE INTO counters (id, business_id, branch_id, counter_number, name, status, is_primary, created_at)
+      SELECT 'counter-1', b.business_id, b.id, 1, 'Counter 1 (Main PC)', 'active', 1, b.created_at
+      FROM branches b
+      WHERE b.is_active = 1
+      ORDER BY b.created_at ASC, b.rowid ASC
+      LIMIT 1;
+    `,
+  },
+  {
+    version: 17,
+    sql: `
+      CREATE TABLE IF NOT EXISTS sync_outbox (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        counter_id TEXT NOT NULL,
+        sync_epoch INTEGER NOT NULL DEFAULT 1,
+        payload_json TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_flight','acked','failed_permanent')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT NOT NULL,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        acked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_sync_outbox_status_next ON sync_outbox(status, next_attempt_at, seq);
+      CREATE INDEX IF NOT EXISTS idx_sync_outbox_entity ON sync_outbox(entity_type, entity_id);
+
+      CREATE TABLE IF NOT EXISTS sync_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sync_conflicts (
+        id TEXT PRIMARY KEY,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        local_event_id TEXT,
+        cloud_seq INTEGER,
+        conflict_type TEXT NOT NULL,
+        local_summary TEXT NOT NULL,
+        cloud_summary TEXT NOT NULL,
+        resolution TEXT NOT NULL,
+        resolved_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS processed_cloud_events (
+        event_id TEXT PRIMARY KEY,
+        cloud_seq INTEGER NOT NULL,
+        entity_type TEXT NOT NULL,
+        processed_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sync_logs (
+        id TEXT PRIMARY KEY,
+        direction TEXT NOT NULL CHECK(direction IN ('push','pull','reconcile','system')),
+        status TEXT NOT NULL CHECK(status IN ('ok','error','conflict')),
+        events_count INTEGER NOT NULL DEFAULT 0,
+        detail TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS movement_origins (
+        movement_id TEXT PRIMARY KEY REFERENCES stock_movements(id),
+        origin_source TEXT NOT NULL DEFAULT 'local' CHECK(origin_source IN ('local','cloud_owner','cloud_reconcile')),
+        counter_id TEXT NOT NULL DEFAULT 'counter-1'
+      );
+
+      CREATE TABLE IF NOT EXISTS entity_sync_state (
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        sync_version INTEGER NOT NULL DEFAULT 1,
+        cloud_updated_at TEXT,
+        PRIMARY KEY(entity_type, entity_id)
+      );
+
+      INSERT OR IGNORE INTO app_meta(key, value)
+      VALUES (
+        'shop_uuid',
+        lower(
+          hex(randomblob(4)) || '-' ||
+          hex(randomblob(2)) || '-4' ||
+          substr(hex(randomblob(2)), 2) || '-' ||
+          substr('89ab', 1 + (abs(random()) % 4), 1) ||
+          substr(hex(randomblob(2)), 2) || '-' ||
+          hex(randomblob(6))
+        )
+      );
+
+      INSERT OR IGNORE INTO sync_state(key, value, updated_at) VALUES ('sync_epoch', '1', datetime('now'));
+      INSERT OR IGNORE INTO sync_state(key, value, updated_at) VALUES ('last_pulled_seq', '0', datetime('now'));
+      INSERT OR IGNORE INTO sync_state(key, value, updated_at) VALUES ('last_pushed_seq', '0', datetime('now'));
+    `,
+  },
 ] as const

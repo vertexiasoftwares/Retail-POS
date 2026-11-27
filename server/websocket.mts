@@ -16,17 +16,40 @@ export type RealtimeEvent = {
 interface ConnectedClient {
   socket: Socket;
   token: string;
+  counterId: string;
   userId: string;
   branchId: string;
   businessId: string;
   role: string;
   branches: string[];
+  lastSeenAt: number;
 }
 
 export class RealtimeSyncServer {
   private clients = new Set<ConnectedClient>();
+  private heartbeatTimer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly auth: AuthRepository) {}
+  constructor(private readonly auth: AuthRepository) {
+    // Periodic WS Ping heartbeat to clean up silently dropped Wi-Fi / LAN counters
+    this.heartbeatTimer = setInterval(() => {
+      const now = Date.now();
+      for (const client of this.clients) {
+        if (now - client.lastSeenAt > 75_000 || !this.auth.authenticateToken(client.token, false)) {
+          this.clients.delete(client);
+          try {
+            client.socket.destroy();
+          } catch {}
+          continue;
+        }
+        try {
+          client.socket.write(Buffer.from([0x89, 0x00])); // WebSocket PING frame
+        } catch {
+          this.clients.delete(client);
+        }
+      }
+    }, 25_000);
+    this.heartbeatTimer.unref?.();
+  }
 
   public handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
     const url = req.url || '';
@@ -83,11 +106,13 @@ export class RealtimeSyncServer {
     const client: ConnectedClient = {
       socket,
       token,
+      counterId: this.auth.getTokenCounterId(token),
       userId: session.userId,
       branchId: session.branchId,
       businessId: session.businessId,
       role: session.role,
       branches: session.branches.map(b => b.id),
+      lastSeenAt: Date.now(),
     };
 
     this.clients.add(client);
@@ -116,9 +141,15 @@ export class RealtimeSyncServer {
   }
 
   private handleSocketData(client: ConnectedClient, buffer: Buffer): void {
+    client.lastSeenAt = Date.now();
     if (buffer.length < 2) return;
     const firstByte = buffer[0];
     const opcode = firstByte & 0x0f;
+
+    // Pong frame (0x0A)
+    if (opcode === 0x0a) {
+      return;
+    }
 
     // Ping frame (0x09) -> Respond with Pong (0x0A)
     if (opcode === 0x09) {
@@ -134,6 +165,18 @@ export class RealtimeSyncServer {
       this.clients.delete(client);
       client.socket.destroy();
       return;
+    }
+  }
+
+  public disconnectCounter(counterId: string): void {
+    for (const client of this.clients) {
+      if (client.counterId === counterId) {
+        this.clients.delete(client);
+        try {
+          client.socket.write(Buffer.from([0x88, 0x00]));
+          client.socket.destroy();
+        } catch {}
+      }
     }
   }
 
@@ -219,6 +262,10 @@ export class RealtimeSyncServer {
   }
 
   public closeAll(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     for (const client of this.clients) {
       try {
         const closeFrame = Buffer.from([0x88, 0x00]);

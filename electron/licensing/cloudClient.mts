@@ -4,6 +4,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 
+export const RETAIL_LICENSE_PRODUCT = 'retail-pos' as const
 export const MEDKIT_SERVER_URL = 'https://iaqevipmygglullkzzsf.supabase.co/functions/v1/medkit-api'
 export const MEDKIT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAko1NXv+rCcEV5i+tiDXiB/wm8HI3hS6nkgGNe5aiLdQ=
@@ -18,7 +19,11 @@ function deviceIdFor(publicKey: string, machineId: string): string {
   return hash(`${publicKey}\n${machineId}`)
 }
 
-export function decodeSignedReceipt(token: string, publicKeyPem: string = MEDKIT_PUBLIC_KEY): any {
+export function decodeSignedReceipt(
+  token: string,
+  publicKeyPem: string = MEDKIT_PUBLIC_KEY,
+  expectedProduct: string = RETAIL_LICENSE_PRODUCT,
+): any {
   const parts = String(token || '').split('.')
   if (parts.length !== 2 || parts[0].length > 20000) {
     throw new Error('Invalid license token structure')
@@ -29,8 +34,8 @@ export function decodeSignedReceipt(token: string, publicKeyPem: string = MEDKIT
     throw new Error('Invalid license signature')
   }
   const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'))
-  if (payload.version !== 1 || payload.product !== 'medkit-pos') {
-    throw new Error('Invalid license product or version')
+  if (payload.version !== 1 || payload.product !== expectedProduct) {
+    throw new Error(`Invalid license product (${String(payload.product || 'unknown')})`)
   }
   return payload
 }
@@ -97,10 +102,19 @@ export type CloudLicenseStatus = {
   registration?: CloudRegistration | null
 }
 
+export type CloudLicenseClientOptions = {
+  serverUrl?: string
+  publicKey?: string
+  transport?: typeof fetch
+}
+
 export class CloudLicenseClient {
   private identity: { publicKey: string; privateKey: string; machineId: string }
   public readonly deviceId: string
   public readonly installationId: string
+  public readonly serverUrl: string
+  public readonly publicKey: string
+  private readonly transport: typeof fetch
   private cachePath: string
   private registrationPath: string
   private cache: any = null
@@ -113,7 +127,10 @@ export class CloudLicenseClient {
     instructions: 'Contact Vertexia on WhatsApp with your Registration ID to purchase or renew your Retail POS license.',
   }
 
-  constructor(private readonly dataDir: string) {
+  constructor(private readonly dataDir: string, options: CloudLicenseClientOptions = {}) {
+    this.serverUrl = (options.serverUrl || process.env.VERTEXIA_LICENSE_SERVER_URL || MEDKIT_SERVER_URL).replace(/\/+$/, '')
+    this.publicKey = options.publicKey || process.env.VERTEXIA_LICENSE_PUBLIC_KEY || MEDKIT_PUBLIC_KEY
+    this.transport = options.transport || fetch
     fs.mkdirSync(dataDir, { recursive: true })
     this.cachePath = path.join(dataDir, 'cloud-license-cache.json')
     this.registrationPath = path.join(dataDir, 'cloud-registration.json')
@@ -166,8 +183,8 @@ export class CloudLicenseClient {
 
   private async request(action: string, payload: any) {
     const proof = createProof(action, payload, this.identity)
-    const url = `${MEDKIT_SERVER_URL}/license-api/${action}`
-    const response = await fetch(url, {
+    const url = `${this.serverUrl}/license-api/${action}`
+    const response = await this.transport(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(proof),
@@ -199,7 +216,7 @@ export class CloudLicenseClient {
     }
 
     try {
-      const license = decodeSignedReceipt(this.cache.receipt, MEDKIT_PUBLIC_KEY)
+      const license = decodeSignedReceipt(this.cache.receipt, this.publicKey, RETAIL_LICENSE_PRODUCT)
       const permanent = license.permanent === true && license.expiresAt === null
       const now = Date.now()
 
@@ -273,6 +290,7 @@ export class CloudLicenseClient {
       email: reg.email || '',
       city: reg.city,
       businessType: reg.businessType || 'Retail Mart / POS',
+      product: RETAIL_LICENSE_PRODUCT,
     })
     return result
   }
@@ -285,8 +303,11 @@ export class CloudLicenseClient {
     }
 
     const normalizedKey = key.trim().toUpperCase()
-    if (!/^MK-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalizedKey)) {
-      throw new Error('Invalid key format. Expected MK-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX')
+    if (/^MK-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalizedKey)) {
+      throw new Error('Pharmacy license keys (MK-...) cannot activate Vertexia Retail POS. Use a Retail POS (VR-...) key.')
+    }
+    if (!/^VR-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(normalizedKey)) {
+      throw new Error('Invalid key format. Expected VR-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX')
     }
 
     // Ensure business is registered first
@@ -299,6 +320,7 @@ export class CloudLicenseClient {
     const data = await this.request('activate', {
       businessId: targetBusinessId,
       key: normalizedKey,
+      product: RETAIL_LICENSE_PRODUCT,
       deviceName: os.hostname() || 'Retail POS Terminal',
     })
 
@@ -306,8 +328,8 @@ export class CloudLicenseClient {
       throw new Error('Licensing server did not return a valid receipt.')
     }
 
-    // Verify receipt immediately
-    decodeSignedReceipt(data.receipt, MEDKIT_PUBLIC_KEY)
+    // Verify receipt immediately (must be cryptographically signed for retail-pos)
+    decodeSignedReceipt(data.receipt, this.publicKey, RETAIL_LICENSE_PRODUCT)
 
     this.cache = { receipt: data.receipt, lastSeen: Date.now() }
     fs.writeFileSync(this.cachePath, JSON.stringify(this.cache, null, 2), 'utf8')
@@ -323,10 +345,11 @@ export class CloudLicenseClient {
 
     const data = await this.request('refresh', {
       businessId: reg.businessId,
+      product: RETAIL_LICENSE_PRODUCT,
     })
 
     if (data.receipt) {
-      decodeSignedReceipt(data.receipt, MEDKIT_PUBLIC_KEY)
+      decodeSignedReceipt(data.receipt, this.publicKey, RETAIL_LICENSE_PRODUCT)
       this.cache = { receipt: data.receipt, lastSeen: Date.now() }
       fs.writeFileSync(this.cachePath, JSON.stringify(this.cache, null, 2), 'utf8')
     }

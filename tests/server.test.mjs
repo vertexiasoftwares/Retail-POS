@@ -235,6 +235,8 @@ test('Vertexia Central Server Foundation', async (t) => {
     assert.ok(typeof info.deviceId === 'string' && info.deviceId.length > 0)
     assert.equal('password' in info, false)
     assert.equal('sales' in info, false)
+    assert.match(info.lanUrl, /^http:\/\/.+:\d+$/)
+    assert.equal(info.lanPort, 8080)
 
     // Cashier cannot update business name or verify settings password
     const cashierUpdate = await fetch(`${baseUrl}/api/auth/update-business`, {

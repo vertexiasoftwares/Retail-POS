@@ -21,7 +21,7 @@ export class BranchRepository {
     return result
   }
   private catalog(branchId:string,time:string) {
-    this.db.prepare('INSERT OR IGNORE INTO stock_levels SELECT ?,id,0,? FROM products WHERE business_id=?').run(branchId,time,this.businessId)
+    this.db.prepare('INSERT OR IGNORE INTO stock_levels(branch_id,product_id,quantity_milli,updated_at) SELECT ?,id,0,? FROM products WHERE business_id=?').run(branchId,time,this.businessId)
     this.db.prepare('INSERT OR IGNORE INTO stock_values SELECT branch_id,product_id,0,0,? FROM stock_levels WHERE branch_id=? AND quantity_milli=0').run(time,branchId)
   }
   private audit(branchId:string,id:string,message:string,reference:string,time:string) {

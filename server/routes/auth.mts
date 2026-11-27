@@ -15,7 +15,8 @@ import {
   isSecureRequest,
   validateOrigin,
 } from '../server.mjs';
-import { enforceAuth } from '../auth-guard.mjs';
+import { enforceAuth, isPrivateOrLoopbackIp, resolveRequestCounterId } from '../auth-guard.mjs';
+import { authRateLimiter, enforceRateLimit } from '../rate-limit.mjs';
 
 export function registerAuthRoutes(
   app: FastifyInstance,
@@ -25,15 +26,21 @@ export function registerAuthRoutes(
 ): void {
   // POST /api/auth/login
   app.post('/api/auth/login', async (request, reply) => {
+    if (!isPrivateOrLoopbackIp(request.ip)) {
+      return reply.status(403).send({ error: 'ForbiddenNetwork', message: 'Local login is restricted to the private shop network.', statusCode: 403 });
+    }
     if (!validateOrigin(request)) {
       return reply.status(403).send({ error: 'Forbidden', message: 'Cross-origin request blocked.', statusCode: 403 });
     }
+    if (!enforceRateLimit(authRateLimiter, request, reply, 'auth-login')) return;
+    const counterId = resolveRequestCounterId(request, db, reply, false);
+    if (!counterId) return;
     const body = request.body as { username?: unknown; password?: unknown } | undefined;
     if (!body || typeof body.username !== 'string' || typeof body.password !== 'string') {
       return reply.status(400).send({ error: 'BadRequest', message: 'Username and password are required.', statusCode: 400 });
     }
     try {
-      const { token, session } = await auth.loginWithToken(body.username, body.password);
+      const { token, session } = await auth.loginWithToken(body.username, body.password, counterId, request.ip);
       const secure = isSecureRequest(request);
       setSessionCookie(reply, token, secure);
       return {

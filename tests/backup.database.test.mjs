@@ -8,6 +8,8 @@ import { join } from 'node:path'
 import { VertexiaDatabase } from '../electron-dist/electron/database/database.mjs'
 import { AuthRepository } from '../electron-dist/electron/database/auth.mjs'
 import { BackupService, inspectBackup, fileChecksum } from '../electron-dist/electron/backup.mjs'
+import { migrations } from '../electron-dist/electron/database/schema.mjs'
+import { dirname } from 'node:path'
 
 const branchId = 'branch-main', password = 'Backup owner passphrase 2026'
 const productInput = { name: 'Backup Rice', sku: 'BACKUP-001', barcode: 'BACKUP-001', category: 'General', subcategory: '', brand: '', unit: 'Kg', purchasePricePaisa: 10000, sellingPricePaisa: 15000, mrpPaisa: 0, minimumStockMilli: 0, openingStockMilli: 10000, status: 'active', imageDataUrl: null }
@@ -191,16 +193,45 @@ test('failed installation and failed recovery reopening keep actions locked and 
   await state.auth.login('owner', password)
 })
 
+function snapshotAtVersion(targetVersion, copyDataFromDb) {
+  const target = join(dirname(copyDataFromDb), `legacy-v${targetVersion}-${randomUUID()}.sqlite`)
+  const legacyDb = new DatabaseSync(target)
+  try {
+    for (const m of migrations) {
+      if (m.version <= targetVersion) legacyDb.exec(m.sql)
+    }
+    legacyDb.exec(`PRAGMA user_version = ${targetVersion}`)
+    const tables = legacyDb
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+      .all()
+      .map(r => String(r.name))
+    const srcPath = copyDataFromDb.replaceAll("'", "''")
+    legacyDb.exec(`PRAGMA foreign_keys=OFF; ATTACH DATABASE '${srcPath}' AS src;`)
+    for (const tbl of tables) {
+      const cols = legacyDb
+        .prepare(`PRAGMA table_info("${tbl}")`)
+        .all()
+        .map(c => `"${String(c.name)}"`)
+        .join(',')
+      if (cols) legacyDb.exec(`INSERT OR REPLACE INTO main."${tbl}" (${cols}) SELECT ${cols} FROM src."${tbl}";`)
+    }
+    legacyDb.exec('DETACH DATABASE src; PRAGMA foreign_keys=ON;')
+  } finally {
+    legacyDb.close()
+  }
+  return target
+}
+
 test('milestone-seven backups are validated and upgraded on a private copy while the original stays unchanged', async t => {
   const state = await setup(t), product = state.db.saveProduct(branchId, productInput), record = await state.service.create()
-  const legacy = copyMutated(state, record, db => db.exec('DROP TABLE stock_transfer_items;DROP TABLE stock_transfers;DROP TABLE transfer_document_sequences;DROP TABLE stock_value_movements; DROP TABLE sale_item_costs; DROP TABLE stock_values; DROP TABLE expense_reversals; DROP TABLE expense_postings; DROP TABLE customer_receipts; DROP TABLE account_document_sequences; PRAGMA user_version=7'))
+  const legacy = snapshotAtVersion(7, record.path)
   const checksum = await fileChecksum(legacy)
   assert.equal(inspectBackup(legacy).schemaVersion, 7)
   const summary = await state.service.preview(legacy, state.ownerId)
-  assert.equal(summary.schemaVersion, 10); assert.equal(await fileChecksum(legacy), checksum)
+  assert.equal(summary.schemaVersion, migrations.at(-1).version); assert.equal(await fileChecksum(legacy), checksum)
   await state.service.restore(state.request(summary), state.ownerId, state.hooks)
   await state.auth.login('owner', password)
-  assert.equal(state.db.connection.prepare('PRAGMA user_version').get().user_version, 10)
+  assert.equal(state.db.connection.prepare('PRAGMA user_version').get().user_version, migrations.at(-1).version)
   assert.equal(state.db.retail.getSnapshot(branchId).products[0].id, product.id)
   assert.equal(state.db.accounts.customers({ branchId, search: '', filter: 'all', page: 1, pageSize: 25 }).duePaisa, 0)
 })
@@ -211,9 +242,9 @@ test('milestone-eight backups upgrade estimated stock while preserving receipts 
   const customer = state.db.accounts.createCustomer({branchId,operationId:randomUUID(),name:'Old backup customer',phone:'',openingBalancePaisa:10000})
   const receipt = state.db.accounts.collect({branchId,operationId:randomUUID(),customerId:customer.customerId,amountPaisa:5000,method:'Cash',reference:''})
   const record=await state.service.create()
-  const legacy=copyMutated(state,record,db=>db.exec('DROP TABLE stock_transfer_items;DROP TABLE stock_transfers;DROP TABLE transfer_document_sequences;DROP TABLE stock_value_movements; DROP TABLE sale_item_costs; DROP TABLE stock_values; PRAGMA user_version=8'))
+  const legacy=snapshotAtVersion(8, record.path)
   const checksum=await fileChecksum(legacy),summary=await state.service.preview(legacy,state.ownerId)
-  assert.equal(summary.schemaVersion,10);assert.equal(await fileChecksum(legacy),checksum)
+  assert.equal(summary.schemaVersion,migrations.at(-1).version);assert.equal(await fileChecksum(legacy),checksum)
   const shift=state.db.cash.snapshot(branchId).activeShift
   state.db.cash.close({branchId,operationId:randomUUID(),shiftId:shift.id,countedCashPaisa:105000,note:''})
   await state.service.restore(state.request(summary),state.ownerId,state.hooks)
@@ -226,9 +257,9 @@ test('milestone-eight backups upgrade estimated stock while preserving receipts 
 
 test('version-nine backup upgrade preserves recorded valuation without re-estimating existing costs',async t=>{
   const state=await setup(t),product=state.db.saveProduct(branchId,productInput),record=await state.service.create()
-  const legacy=copyMutated(state,record,db=>db.exec('DROP TABLE stock_transfer_items; DROP TABLE stock_transfers; DROP TABLE transfer_document_sequences; PRAGMA user_version=9'))
+  const legacy=snapshotAtVersion(9, record.path)
   const checksum=await fileChecksum(legacy),summary=await state.service.preview(legacy,state.ownerId)
-  assert.equal(summary.schemaVersion,10);assert.equal(await fileChecksum(legacy),checksum)
+  assert.equal(summary.schemaVersion,migrations.at(-1).version);assert.equal(await fileChecksum(legacy),checksum)
   await state.service.restore(state.request(summary),state.ownerId,state.hooks);await state.auth.login('owner',password)
   assert.equal(state.db.reports.valuation(branchId).valuePaisa,100000);assert.equal(state.db.reports.valuation(branchId).estimatedProducts,0)
   assert.equal(state.db.retail.getSnapshot(branchId).products[0].id,product.id)

@@ -3,19 +3,41 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AuthSession, AuthStatus, BusinessSetupInput, BusinessUpdateInput, Permission, StaffCreateInput, StaffUpdateInput, StaffUser } from '../../src/types/auth.js'
 import { isUserRole, rolePermissions } from '../../src/shared/auth-policy.js'
 import { getRequestContext } from './context.mjs'
+import { enqueueOutboxEvent } from '../sync/outbox.mjs'
 
 type Row = Record<string, string | number | null>
 const HASH_OPTIONS = { N: 131072, r: 8, p: 1, maxmem: 160 * 1024 * 1024 }
 const dummyHash = `scrypt-v1$${'00'.repeat(16)}$${'00'.repeat(64)}`
 const IDLE_MS = 30 * 60 * 1000
 const MAX_SESSION_MS = 12 * 60 * 60 * 1000
+const TOUCH_DB_INTERVAL_MS = 30 * 1000
+const MAX_SCRYPT_CONCURRENCY = 2
+
+let activeScryptOps = 0
+const scryptWaiters: Array<() => void> = []
+
+async function runBoundedScrypt<T>(work: () => Promise<T>): Promise<T> {
+  if (activeScryptOps >= MAX_SCRYPT_CONCURRENCY) {
+    await new Promise<void>(resolve => scryptWaiters.push(resolve))
+  }
+  activeScryptOps += 1
+  try {
+    return await work()
+  } finally {
+    activeScryptOps -= 1
+    const next = scryptWaiters.shift()
+    if (next) next()
+  }
+}
 
 interface SessionRecord {
   userId: string
   version: number
   branchId: string
+  counterId: string
   issuedAt: number
   touchedAt: number
+  dbTouchedAt: number
 }
 
 function text(value: unknown, label: string, limit = 120): string {
@@ -32,7 +54,7 @@ function password(value: unknown, newPassword = false): string {
   return value
 }
 async function derive(value: string, salt: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => scrypt(value, Buffer.from(salt, 'hex'), 64, HASH_OPTIONS, (error, key) => error ? reject(error) : resolve(key)))
+  return runBoundedScrypt(() => new Promise((resolve, reject) => scrypt(value, Buffer.from(salt, 'hex'), 64, HASH_OPTIONS, (error, key) => error ? reject(error) : resolve(key))))
 }
 async function hashPassword(value: string) {
   const salt = randomBytes(16).toString('hex')
@@ -96,6 +118,13 @@ export class AuthRepository {
       onInvalidate()
       return null
     }
+    if (record.counterId && record.counterId !== 'counter-1') {
+      const counter = this.db.prepare('SELECT status FROM counters WHERE id=?').get(record.counterId) as Row | undefined
+      if (!counter || String(counter.status) !== 'active') {
+        onInvalidate()
+        return null
+      }
+    }
     const user = this.db.prepare('SELECT u.*,c.username,c.credential_version,c.must_change_password FROM users u JOIN user_credentials c ON c.user_id=u.id WHERE u.id=?').get(record.userId) as Row | undefined
     if (!user || Number(user.is_active) !== 1 || Number(user.credential_version) !== record.version || !isUserRole(user.role)) {
       onInvalidate()
@@ -131,11 +160,68 @@ export class AuthRepository {
     }
   }
 
-  private createSessionRecord(userId: string): SessionRecord {
+  private createSessionRecord(userId: string, counterId = 'counter-1'): SessionRecord {
     const user = this.db.prepare('SELECT c.credential_version,b.id AS branch_id FROM user_credentials c JOIN user_branches ub ON ub.user_id=c.user_id JOIN branches b ON b.id=ub.branch_id JOIN users u ON u.id=c.user_id WHERE c.user_id=? AND b.is_active=1 AND b.business_id=u.business_id ORDER BY b.code LIMIT 1').get(userId) as Row | undefined
     if (!user) throw new Error('This account has no active branch. Contact the owner.')
     const time = this.now().getTime()
-    return { userId, version: Number(user.credential_version), branchId: String(user.branch_id), issuedAt: time, touchedAt: time }
+    return { userId, version: Number(user.credential_version), branchId: String(user.branch_id), counterId, issuedAt: time, touchedAt: time, dbTouchedAt: time }
+  }
+
+  private persistSessionRecord(tokenHash: string, record: SessionRecord, ipAddress?: string): void {
+    try {
+      this.db.prepare(
+        `INSERT OR REPLACE INTO auth_sessions (token_hash, user_id, branch_id, counter_id, credential_version, issued_at, touched_at, expires_at, revoked_at, ip_address)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      ).run(
+        tokenHash,
+        record.userId,
+        record.branchId,
+        record.counterId || 'counter-1',
+        record.version,
+        record.issuedAt,
+        record.touchedAt,
+        record.issuedAt + MAX_SESSION_MS,
+        ipAddress?.slice(0, 64) || null,
+      )
+    } catch {
+      // ignore on minimal test schemas without auth_sessions
+    }
+  }
+
+  private loadSessionRecord(tokenHash: string): SessionRecord | null {
+    try {
+      const row = this.db
+        .prepare('SELECT user_id, branch_id, counter_id, credential_version, issued_at, touched_at, revoked_at FROM auth_sessions WHERE token_hash=?')
+        .get(tokenHash) as Row | undefined
+      if (!row || row.revoked_at !== null) return null
+      return {
+        userId: String(row.user_id),
+        branchId: String(row.branch_id),
+        counterId: row.counter_id ? String(row.counter_id) : 'counter-1',
+        version: Number(row.credential_version),
+        issuedAt: Number(row.issued_at),
+        touchedAt: Number(row.touched_at),
+        dbTouchedAt: Number(row.touched_at),
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private revokeTokenInDb(tokenHash: string): void {
+    this.sessions.delete(tokenHash)
+    try {
+      this.db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL').run(this.now().toISOString(), tokenHash)
+    } catch {}
+  }
+
+  private revokeUserSessionsInDb(userId: string): void {
+    for (const [key, rec] of this.sessions.entries()) {
+      if (rec.userId === userId) this.sessions.delete(key)
+    }
+    try {
+      this.db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(this.now().toISOString(), userId)
+    } catch {}
   }
 
   status(token?: string): AuthStatus {
@@ -154,13 +240,31 @@ export class AuthRepository {
   authenticateToken(token: string, touchSession = true): AuthSession | null {
     if (typeof token !== 'string' || !token) return null
     const tokenHash = this.hashToken(token)
-    const record = this.sessions.get(tokenHash)
-    if (!record) return null
-    const session = this.validateSessionRecord(record, () => { this.sessions.delete(tokenHash) }, touchSession)
+    let record = this.sessions.get(tokenHash)
+    if (!record) {
+      const loaded = this.loadSessionRecord(tokenHash)
+      if (!loaded) return null
+      record = loaded
+      this.sessions.set(tokenHash, record)
+    }
+    const session = this.validateSessionRecord(record, () => { this.revokeTokenInDb(tokenHash) }, touchSession)
     if (session) {
       session.sessionToken = token
+      if (touchSession && record.touchedAt - record.dbTouchedAt >= TOUCH_DB_INTERVAL_MS) {
+        record.dbTouchedAt = record.touchedAt
+        try {
+          this.db.prepare('UPDATE auth_sessions SET touched_at=? WHERE token_hash=?').run(record.touchedAt, tokenHash)
+        } catch {}
+      }
     }
     return session
+  }
+
+  getTokenCounterId(token: string): string {
+    if (typeof token !== 'string' || !token) return 'counter-1'
+    const tokenHash = this.hashToken(token)
+    const rec = this.sessions.get(tokenHash) ?? this.loadSessionRecord(tokenHash)
+    return rec?.counterId || 'counter-1'
   }
 
   require(permission?: Permission, branchId?: unknown, allowPasswordChange = false, touchSession = true, token?: string): AuthSession {
@@ -218,8 +322,25 @@ export class AuthRepository {
         `).run(String(owner.id), login, hash, time)
         this.db.prepare('DELETE FROM login_throttle WHERE username=? OR username=?').run(login, '*')
         this.db.prepare('INSERT OR IGNORE INTO user_branches SELECT ?,id FROM branches WHERE business_id=? AND is_active=1').run(String(owner.id), businessId)
+        this.db.prepare("INSERT OR IGNORE INTO counters (id, business_id, branch_id, counter_number, name, status, is_primary, last_seen_at, created_at) VALUES ('counter-1', ?, ?, 1, 'Counter 1 (Main PC)', 'active', 1, ?, ?)").run(businessId, String(branch.id), time, time)
         this.db.prepare("INSERT INTO app_meta(key,value) VALUES ('auth_setup_complete',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(time)
         this.audit(String(owner.id), String(branch.id), 'Business setup completed', String(owner.id))
+        enqueueOutboxEvent(this.db, {
+          entityType: 'business_profile',
+          entityId: businessId,
+          operation: 'setup',
+          counterId: 'counter-1',
+          occurredAt: time,
+          payload: { businessId, branchId: String(branch.id), businessName, branchName, city },
+        })
+        enqueueOutboxEvent(this.db, {
+          entityType: 'user',
+          entityId: String(owner.id),
+          operation: 'upsert',
+          counterId: 'counter-1',
+          occurredAt: time,
+          payload: { id: String(owner.id), businessId, branchId: String(branch.id), name: ownerName, username: login, role: 'Owner', isActive: true, syncVersion: 1, createdAt: time },
+        })
         return this.start(String(owner.id))
       })
     })
@@ -267,14 +388,15 @@ export class AuthRepository {
     })
   }
 
-  loginWithToken(loginInput: unknown, passwordInput: unknown): Promise<{ token: string; session: AuthSession }> {
+  loginWithToken(loginInput: unknown, passwordInput: unknown, counterId = 'counter-1', ipAddress?: string): Promise<{ token: string; session: AuthSession }> {
     return this.serial(async () => {
       const user = await this.authenticateCredentials(loginInput, passwordInput)
       const token = this.generateToken()
       const tokenHash = this.hashToken(token)
-      const record = this.createSessionRecord(String(user.user_id))
+      const record = this.createSessionRecord(String(user.user_id), counterId || 'counter-1')
       this.sessions.set(tokenHash, record)
-      const session = this.validateSessionRecord(record, () => { this.sessions.delete(tokenHash) }, false)!
+      this.persistSessionRecord(tokenHash, record, ipAddress)
+      const session = this.validateSessionRecord(record, () => { this.revokeTokenInDb(tokenHash) }, false)!
       session.sessionToken = token
       this.audit(session.userId, session.branchId, 'User signed in', session.userId)
       return { token, session }
@@ -295,10 +417,10 @@ export class AuthRepository {
   logoutToken(token: string): void {
     if (typeof token !== 'string' || !token) return
     const tokenHash = this.hashToken(token)
-    const record = this.sessions.get(tokenHash)
+    const record = this.sessions.get(tokenHash) ?? this.loadSessionRecord(tokenHash)
     if (!record) return
     const session = this.validateSessionRecord(record, () => {}, false)
-    this.sessions.delete(tokenHash)
+    this.revokeTokenInDb(tokenHash)
     if (session) this.audit(session.userId, session.branchId, 'User signed out', session.userId)
   }
 
@@ -396,6 +518,14 @@ export class AuthRepository {
         this.db.prepare('INSERT INTO user_credentials(user_id,username,password_hash,must_change_password,updated_at) VALUES (?,?,?,1,?)').run(id, login, hash, time)
         for (const branch of branches) this.db.prepare('INSERT INTO user_branches VALUES (?,?)').run(id, branch)
         this.audit(session.userId, session.branchId, 'Staff login created', id)
+        enqueueOutboxEvent(this.db, {
+          entityType: 'user',
+          entityId: id,
+          operation: 'upsert',
+          counterId: 'counter-1',
+          occurredAt: time,
+          payload: { id, businessId: session.businessId, branchId: branches[0], name, username: login, role: input.role, isActive: true, allowedTabs: input.allowedTabs ?? null, syncVersion: 1, createdAt: time },
+        })
         return this.listUsers()
       })
     })
@@ -405,7 +535,7 @@ export class AuthRepository {
     const session = this.require('users.manage', undefined, false, true, effectiveToken)
     if (!input || !isUserRole(input.role) || typeof input.isActive !== 'boolean') throw new Error('Invalid staff update.')
     if (input.userId === session.userId) throw new Error('Ask another owner to change your own role or access.')
-    const user = this.db.prepare('SELECT u.*,c.user_id AS login_id FROM users u LEFT JOIN user_credentials c ON c.user_id=u.id WHERE u.id=? AND u.business_id=?').get(text(input.userId, 'user identifier', 100), session.businessId) as Row | undefined
+    const user = this.db.prepare('SELECT u.*,c.user_id AS login_id,c.username FROM users u LEFT JOIN user_credentials c ON c.user_id=u.id WHERE u.id=? AND u.business_id=?').get(text(input.userId, 'user identifier', 100), session.businessId) as Row | undefined
     if (!user) throw new Error('Staff member not found.')
     if (input.isActive && !user.login_id) throw new Error('Legacy staff has no login. Create a new staff account.')
     const branches = this.validateBranches(input.branchIds, session.businessId)
@@ -415,11 +545,23 @@ export class AuthRepository {
         const others = this.db.prepare("SELECT 1 FROM users u JOIN user_credentials c ON c.user_id=u.id JOIN user_branches ub ON ub.user_id=u.id JOIN branches b ON b.id=ub.branch_id WHERE u.business_id=? AND u.id<>? AND u.role='Owner' AND u.is_active=1 AND b.is_active=1 LIMIT 1").get(session.businessId, input.userId)
         if (!others) throw new Error('The last active owner cannot be removed.')
       }
+      const time = this.now().toISOString()
       this.db.prepare('UPDATE users SET role=?,is_active=?,allowed_tabs=? WHERE id=?').run(input.role, input.isActive ? 1 : 0, allowedTabsJson, input.userId)
+      this.db.prepare("INSERT INTO entity_sync_state(entity_type,entity_id,sync_version) VALUES ('user',?,2) ON CONFLICT(entity_type,entity_id) DO UPDATE SET sync_version=sync_version+1").run(input.userId)
+      const userSyncVer = Number((this.db.prepare("SELECT sync_version FROM entity_sync_state WHERE entity_type='user' AND entity_id=?").get(input.userId) as Row | undefined)?.sync_version ?? 2)
       this.db.prepare('UPDATE user_credentials SET credential_version=credential_version+1 WHERE user_id=?').run(input.userId)
+      this.revokeUserSessionsInDb(input.userId)
       this.db.prepare('DELETE FROM user_branches WHERE user_id=?').run(input.userId)
       for (const branch of branches) this.db.prepare('INSERT INTO user_branches VALUES (?,?)').run(input.userId, branch)
       this.audit(session.userId, session.branchId, 'Staff role, status and branch access updated', input.userId)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'user',
+        entityId: input.userId,
+        operation: 'upsert',
+        counterId: 'counter-1',
+        occurredAt: time,
+        payload: { id: input.userId, businessId: session.businessId, branchId: branches[0], name: String(user.name), username: user.username ? String(user.username) : null, role: input.role, isActive: input.isActive, allowedTabs: input.allowedTabs ?? null, syncVersion: userSyncVer },
+      })
       return this.listUsers()
     })
   }
@@ -428,7 +570,7 @@ export class AuthRepository {
       this.authorizeWrite('auth:reset-password')
       const effectiveToken = getRequestContext()?.sessionToken
       const session = this.require('users.manage', undefined, false, true, effectiveToken)
-      const original = effectiveToken ? this.sessions.get(this.hashToken(effectiveToken))! : this.desktopSession!
+      const original = effectiveToken ? (this.sessions.get(this.hashToken(effectiveToken)) ?? this.loadSessionRecord(this.hashToken(effectiveToken)))! : this.desktopSession!
       if (userId === session.userId) throw new Error('Use Change Password for your own account.')
       if (!this.db.prepare('SELECT 1 FROM users u JOIN user_credentials c ON c.user_id=u.id WHERE u.id=? AND u.business_id=?').get(text(userId, 'user identifier', 100), session.businessId)) throw new Error('Staff login not found.')
       const hash = await hashPassword(password(newPassword, true))
@@ -436,6 +578,7 @@ export class AuthRepository {
       this.transaction(() => {
         this.authorizeWrite('auth:reset-password')
         this.db.prepare('UPDATE user_credentials SET password_hash=?,credential_version=credential_version+1,must_change_password=1,failed_attempts=0,locked_until=NULL,updated_at=? WHERE user_id=?').run(hash, this.now().toISOString(), userId)
+        this.revokeUserSessionsInDb(userId)
         this.audit(session.userId, session.branchId, 'Staff password reset', userId)
       })
     })
@@ -463,9 +606,16 @@ export class AuthRepository {
       if (token) {
         const tokenHash = this.hashToken(token)
         const rec = this.sessions.get(tokenHash)
-        if (rec) rec.version += 1
+        if (rec) {
+          rec.version += 1
+          try {
+            this.db.prepare('UPDATE auth_sessions SET credential_version=? WHERE token_hash=?').run(rec.version, tokenHash)
+            this.db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND token_hash<>? AND revoked_at IS NULL').run(this.now().toISOString(), session.userId, tokenHash)
+          } catch {}
+        }
         return this.authenticateToken(token, false)!
       }
+      this.revokeUserSessionsInDb(session.userId)
       return this.start(session.userId)
     })
   }
@@ -504,12 +654,21 @@ export class AuthRepository {
       this.unchangedSession(original, effectiveToken)
       this.require('settings.manage', undefined, false, true, effectiveToken)
       this.transaction(() => {
+        const nowIso = this.now().toISOString()
         this.db.prepare('UPDATE user_credentials SET failed_attempts=0,locked_until=NULL WHERE user_id=?').run(session.userId)
         this.db.prepare('UPDATE businesses SET name=? WHERE id=?').run(businessName, session.businessId)
         if (branchName || city) {
           this.db.prepare('UPDATE branches SET name=COALESCE(?, name), city=COALESCE(?, city) WHERE id=? AND business_id=?').run(branchName ?? null, city ?? null, session.branchId, session.businessId)
         }
         this.audit(session.userId, session.branchId, 'Business settings updated', businessName)
+        enqueueOutboxEvent(this.db, {
+          entityType: 'business_profile',
+          entityId: session.businessId,
+          operation: 'update',
+          counterId: 'counter-1',
+          occurredAt: nowIso,
+          payload: { businessId: session.businessId, branchId: session.branchId, businessName, branchName: branchName ?? null, city: city ?? null },
+        })
       })
       if (effectiveToken) {
         return this.authenticateToken(effectiveToken, false)!

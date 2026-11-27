@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, powerMonitor, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, powerMonitor, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import os from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
 import { LicenseClient } from './licensing/client.mjs'
@@ -7,6 +7,7 @@ import { LicenseAuthority } from './licensing/authority.mjs'
 import { createLicenseServer } from './licensing/server.mjs'
 import type { LicenseTrust } from '../src/types/licensing.js'
 import { readFile, stat, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { DashboardChartPeriod, DashboardDateRange, DashboardQuery, PosCompleteSaleRequest, PosCreateCustomerInput, PosCreateProductInput, PosCartLineInput, ProductCatalogQuery, ProductSaveInput, SalesListQuery, SalesReturnRequest } from '../src/types/desktop-api.js'
@@ -21,6 +22,7 @@ import { authorizeIpc, scopeOperation, licenseBranches } from './ipc-policy.mjs'
 import { requiresTransactionLicense } from './licensing/policy.mjs'
 import type { BusinessSetupInput, BusinessUpdateInput, StaffCreateInput, StaffUpdateInput } from '../src/types/auth.js'
 import type { PurchaseReceiveRequest, StockAdjustmentRequest, SupplierDeleteRequest, SupplierPayRequest } from '../src/types/desktop-api.js'
+import { HybridSyncEngine } from './sync/engine.mjs'
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const developmentUrl = !app.isPackaged ? process.env.VITE_DEV_SERVER_URL : undefined
@@ -32,11 +34,45 @@ app.setAppUserModelId('com.vertexia.retailpos')
 const singleInstance = app.requestSingleInstanceLock()
 if (!singleInstance) app.quit()
 
+const LAN_PORT = Number(process.env.PORT) || 8080
+const LAN_HOST = process.env.HOST || '0.0.0.0'
+
+function getLanIpv4Addresses(): string[] {
+  const nets = os.networkInterfaces()
+  const candidates: string[] = []
+  for (const iface of Object.values(nets)) {
+    if (!iface) continue
+    for (const addr of iface) {
+      if (addr.family === 'IPv4' && !addr.internal && addr.address) {
+        candidates.push(addr.address)
+      }
+    }
+  }
+  return candidates.sort((a, b) => {
+    const score = (ip: string) =>
+      ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip) ? 2 : 3
+    return score(a) - score(b)
+  })
+}
+
+function getPrimaryLanIpv4(): string {
+  return getLanIpv4Addresses()[0] || '127.0.0.1'
+}
+
 let mainWindow: BrowserWindow | null = null
 let database: VertexiaDatabase | null = null
 let databasePath = ''
 let auth: AuthRepository | null = null
 let backups: BackupService | null = null
+let lanServer: {
+  start: () => Promise<string>
+  stop: () => Promise<void>
+  syncServer?: { broadcast: (event: { type: string; branchId?: string; businessId?: string }) => void }
+} | null = null
+let syncEngine: HybridSyncEngine | null = null
+let activeLanOrigin = ''
+let appTray: Tray | null = null
+let allowTrayQuit = false
 let maintenance = false
 let restoreNotice = ''
 let smokeExportPath = ''
@@ -68,13 +104,50 @@ function trustedUrl(value: string): boolean {
   try {
     const candidate = new URL(value)
     candidate.hash = ''
+    if (activeLanOrigin && candidate.origin === activeLanOrigin && candidate.pathname === '/') {
+      return true
+    }
+    if (candidate.protocol === 'http:' && (candidate.port || '80') === String(LAN_PORT) && candidate.pathname === '/') {
+      const allowedHosts = new Set(['127.0.0.1', 'localhost', ...getLanIpv4Addresses()])
+      if (allowedHosts.has(candidate.hostname)) return true
+    }
     const expected = developmentUrl ? new URL(developmentUrl.replace(/\/$/, '') + '/') : new URL(pathToFileURL(join(moduleDirectory, '../../dist/index.html')).href)
     expected.hash = ''
     return candidate.href === expected.href
   } catch { return false }
 }
+
+const channelSyncEvent: Record<string, string> = {
+  'pos:complete-sale': 'sale:completed',
+  'sales:create-return': 'sale:returned',
+  'sales:create-manual-return': 'sale:returned',
+  'products:save': 'product:updated',
+  'products:toggle-status': 'product:updated',
+  'products:delete': 'product:updated',
+  'products:import-csv': 'product:updated',
+  'retail:adjust-stock': 'inventory:changed',
+  'retail:receive-purchase': 'purchase:received',
+  'retail:pay-supplier': 'cash:updated',
+  'retail:create-supplier': 'purchase:received',
+  'retail:delete-supplier': 'purchase:received',
+  'transfers:dispatch': 'transfer:dispatched',
+  'transfers:receive': 'transfer:received',
+  'transfers:cancel': 'transfer:cancelled',
+  'pos:open-shift': 'shift:opened',
+  'cash:close-shift': 'shift:closed',
+  'cash:force-close': 'shift:closed',
+  'cash:move': 'cash:updated',
+  'customers:collect': 'cash:updated',
+  'expenses:post': 'cash:updated',
+  'expenses:reverse': 'cash:updated',
+  'branches:create': 'branch:created',
+  'branches:update': 'branch:updated',
+  'branches:set-active': 'branch:updated',
+  'auth:update-business': 'branch:updated',
+}
+
 function handle(channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) {
-  ipcMain.handle(channel, (event, ...args: unknown[]) => {
+  ipcMain.handle(channel, async (event, ...args: unknown[]) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !trustedUrl(event.senderFrame.url)) throw new Error('Untrusted desktop request.')
     if (maintenance && channel !== 'auth:status') throw new Error(auth ? 'Data restore is in progress. Please wait before using the POS.' : restoreNotice || 'Data recovery requires support.')
     try { authorizeIpc(auth!, database!, channel, args) }
@@ -83,7 +156,16 @@ function handle(channel: string, listener: (event: IpcMainInvokeEvent, ...args: 
     licensing!.authorize(channel)
     if (requiresTransactionLicense(channel)) for (const id of licenseBranches(database!, channel, args, session?.branchId)) licensing!.authorize(channel, id)
     if (session) scopeOperation(channel, args, session.userId)
-    return listener(event, ...args)
+    const result = await listener(event, ...args)
+    const eventType = channelSyncEvent[channel]
+    if (eventType && lanServer?.syncServer && session) {
+      lanServer.syncServer.broadcast({
+        type: eventType,
+        branchId: session.branchId,
+        businessId: session.businessId,
+      })
+    }
+    return result
   })
 }
 
@@ -242,6 +324,7 @@ function registerIpc() {
     }
     const local = licensing?.status() ?? null
     const session = auth?.current()
+    const lanUrl = activeLanOrigin || `http://${getPrimaryLanIpv4()}:${LAN_PORT}`
     return {
       appVersion: app.getVersion(),
       os: `${os.type()} ${os.release()} (${process.platform} ${process.arch})`,
@@ -251,6 +334,8 @@ function registerIpc() {
       licenseExpiryDate: cloud?.expires_at ?? local?.expiresAt ?? null,
       deviceId: cloud?.deviceId || local?.deviceId || os.hostname(),
       shopName: session?.businessName || local?.customerName || '',
+      lanUrl,
+      lanPort: LAN_PORT,
     }
   })
   handle('system:open-external', async (_event, url: unknown) => {
@@ -502,8 +587,22 @@ async function createWindow() {
     if (!allowed) event.preventDefault()
   })
   mainWindow.once('ready-to-show', () => { if (!smokeTarget) mainWindow?.show() })
-  if (developmentUrl) await mainWindow.loadURL(`${developmentUrl}/#${initialHash}`)
-  else await mainWindow.loadFile(join(moduleDirectory, '../../dist/index.html'), { hash:initialHash })
+  if (developmentUrl) {
+    await mainWindow.loadURL(`${developmentUrl}/#${initialHash}`)
+  } else if (!smokeTarget) {
+    const lanUrl = activeLanOrigin || `http://${getPrimaryLanIpv4()}:${LAN_PORT}`
+    try {
+      await mainWindow.loadURL(`${lanUrl}/#${initialHash}`)
+    } catch {
+      try {
+        await mainWindow.loadURL(`http://127.0.0.1:${LAN_PORT}/#${initialHash}`)
+      } catch {
+        await mainWindow.loadFile(join(moduleDirectory, '../../dist/index.html'), { hash: initialHash })
+      }
+    }
+  } else {
+    await mainWindow.loadFile(join(moduleDirectory, '../../dist/index.html'), { hash: initialHash })
+  }
 
   if (smokeTarget) {
     try {
@@ -600,7 +699,7 @@ app.whenReady().then(async () => {
     trust = { serviceUrl: 'http://127.0.0.1:' + address.port, issuerPublicKey: smokeAuthority.publicKey }
   } else {
     const trustPath = app.isPackaged ? join(process.resourcesPath, 'licensing-trust.json') : process.env.VERTEXIA_LICENSE_CONFIG
-    if (trustPath) {
+    if (trustPath && existsSync(trustPath)) {
       try { trust = JSON.parse(await readFile(trustPath, 'utf8')) as LicenseTrust }
       catch { trust = { serviceUrl: 'invalid', issuerPublicKey: '' } }
     }
@@ -627,7 +726,75 @@ app.whenReady().then(async () => {
   powerMonitor.on('suspend', lockSession)
   powerMonitor.on('lock-screen', lockSession)
   registerIpc()
-  await createWindow()
+  const isWebAppMode = !smokeTarget && !developmentUrl
+  if (isWebAppMode) {
+    activeLanOrigin = `http://${getPrimaryLanIpv4()}:${LAN_PORT}`
+    syncEngine = new HybridSyncEngine({
+      db: database.connection,
+      appVersion: app.getVersion(),
+    })
+    let serverBound = false
+    try {
+      const serverModulePath = join(moduleDirectory, '../../server-dist/server/server.mjs')
+      const { createServer } = (await import(pathToFileURL(serverModulePath).href)) as {
+        createServer: (opts: Record<string, unknown>) => Promise<NonNullable<typeof lanServer>>
+      }
+      lanServer = await createServer({
+        port: LAN_PORT,
+        host: LAN_HOST,
+        databasePath,
+        staticPath: join(moduleDirectory, '../../dist'),
+        database,
+        auth,
+        backupService: backups,
+        licenseClient: licensing,
+        cloudLicenseClient: cloudLicense,
+        syncController: syncEngine,
+        logger: false,
+      })
+      await lanServer.start()
+      syncEngine.start()
+      serverBound = true
+      console.log(`[Vertexia Web Server] Online at ${activeLanOrigin} (0.0.0.0:${LAN_PORT})`)
+    } catch (error) {
+      console.warn(`[Vertexia Web Server] Could not bind LAN server on port ${LAN_PORT}:`, error)
+    }
+
+    if (!serverBound) {
+      // Port 8080 is already active (e.g. another instance/server): open browser cleanly and exit.
+      await shell.openExternal(activeLanOrigin)
+      allowTrayQuit = true
+      setTimeout(() => app.quit(), 400)
+      return
+    }
+
+    const iconFile = join(moduleDirectory, '../../public/retail-pos-icon.png')
+    const rawIcon = existsSync(iconFile) ? nativeImage.createFromPath(iconFile) : nativeImage.createEmpty()
+    const trayIcon = rawIcon.isEmpty() ? rawIcon : rawIcon.resize({ width: 16, height: 16 })
+    appTray = new Tray(trayIcon)
+    appTray.setToolTip(`Vertexia Retail POS — ${activeLanOrigin}`)
+    appTray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: `Open POS in Browser (${activeLanOrigin})`, click: () => void shell.openExternal(activeLanOrigin) },
+        { label: `Copy LAN URL (${activeLanOrigin})`, click: () => clipboard.writeText(activeLanOrigin) },
+        { type: 'separator' },
+        {
+          label: 'Stop Server & Quit',
+          click: () => {
+            allowTrayQuit = true
+            app.quit()
+          },
+        },
+      ])
+    )
+    appTray.on('click', () => {
+      void shell.openExternal(activeLanOrigin)
+    })
+
+    await shell.openExternal(activeLanOrigin)
+  } else {
+    await createWindow()
+  }
   if (!smokeTarget) {
     void licensing.automatic()
     const licenseTimer = setInterval(() => { if (!maintenance) void licensing!.automatic() }, 10000)
@@ -639,14 +806,32 @@ app.whenReady().then(async () => {
 })
 
 app.on('second-instance', () => {
+  if (!smokeTarget && !developmentUrl) {
+    const targetUrl = activeLanOrigin || `http://${getPrimaryLanIpv4()}:${LAN_PORT}`
+    void shell.openExternal(targetUrl)
+    return
+  }
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.focus()
 })
 
-app.on('window-all-closed', () => app.quit())
+app.on('window-all-closed', () => {
+  if (!smokeTarget && !developmentUrl && !allowTrayQuit) return
+  app.quit()
+})
 let waitingToQuit = false
 app.on('before-quit', event => {
+  allowTrayQuit = true
   if (backups?.status().busy) { event.preventDefault(); if (!waitingToQuit) { waitingToQuit = true; void backups.whenIdle().then(() => app.quit()) } }
 })
-app.on('will-quit', () => { smokeLicenseServer?.close(); smokeAuthority?.close(); database?.close() })
+app.on('will-quit', () => {
+  appTray?.destroy()
+  appTray = null
+  syncEngine?.stop()
+  syncEngine = null
+  void lanServer?.stop()
+  smokeLicenseServer?.close()
+  smokeAuthority?.close()
+  database?.close()
+})

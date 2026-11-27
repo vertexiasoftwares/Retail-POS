@@ -38,6 +38,6 @@ export function openingStockValue(db: DatabaseSync, branchId: string, productId:
   const movement = quantityMilli>0 ? db.prepare("SELECT id FROM stock_movements WHERE branch_id=? AND product_id=? AND movement_type='opening_stock' ORDER BY occurred_at DESC,rowid DESC LIMIT 1").get(branchId,productId) : undefined
   changeStockValue(db, branchId, productId, proportionalCost(pricePaisa, quantityMilli), false, occurredAt,movement ? String(movement.id) : undefined)
   // The catalog is business-wide; other active branches start with zero stock.
-  db.prepare('INSERT OR IGNORE INTO stock_levels SELECT b.id,p.id,0,? FROM branches b JOIN products p ON p.business_id=b.business_id WHERE p.id=? AND b.is_active=1').run(occurredAt,productId)
+  db.prepare('INSERT OR IGNORE INTO stock_levels(branch_id,product_id,quantity_milli,updated_at) SELECT b.id,p.id,0,? FROM branches b JOIN products p ON p.business_id=b.business_id WHERE p.id=? AND b.is_active=1').run(occurredAt,productId)
   db.prepare('INSERT OR IGNORE INTO stock_values SELECT branch_id,product_id,0,0,? FROM stock_levels WHERE product_id=? AND quantity_milli=0').run(occurredAt,productId)
 }

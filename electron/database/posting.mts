@@ -11,27 +11,50 @@ function canonical(value: unknown): string {
 
 // The result and every business effect belong to the same database transaction.
 // Retrying a committed operation returns its original result, even after restart.
+export function withSqliteRetry<T>(work: () => T, maxRetries = 6): T {
+  let attempt = 0
+  while (true) {
+    try {
+      return work()
+    } catch (error: any) {
+      const msg = String(error?.message || error?.code || '')
+      if ((msg.includes('SQLITE_BUSY') || msg.includes('database is locked')) && attempt < maxRetries) {
+        attempt += 1
+        // Deterministic short yield before retry (no async inside synchronous sqlite fn)
+        const waitUntil = Date.now() + Math.min(40, 4 * attempt)
+        while (Date.now() < waitUntil) {
+          // bounded micro-spin for rare WAL lock contention
+        }
+        continue
+      }
+      throw error
+    }
+  }
+}
+
 export function postOperation<T>(db: DatabaseSync, branchId: string, operationId: string | undefined, kind: string, request: unknown, occurredAt: string, work: () => T): T {
   const id = operationId === undefined ? randomUUID() : operationId
   if (typeof id !== 'string' || id.length < 8 || id.length > 100 || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('Invalid operation identifier.')
   const hash = createHash('sha256').update(canonical(request)).digest('hex')
-  db.exec('BEGIN IMMEDIATE')
-  try {
-    const existing = db.prepare('SELECT kind,request_hash,result_json FROM operation_results WHERE branch_id=? AND operation_id=?').get(branchId, id)
-    if (existing) {
-      if (existing.kind !== kind || existing.request_hash !== hash) throw new Error('This operation identifier was already used for a different request.')
-      const result = JSON.parse(String(existing.result_json)) as T
+  return withSqliteRetry(() => {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = db.prepare('SELECT kind,request_hash,result_json FROM operation_results WHERE branch_id=? AND operation_id=?').get(branchId, id)
+      if (existing) {
+        if (existing.kind !== kind || existing.request_hash !== hash) throw new Error('This operation identifier was already used for a different request.')
+        const result = JSON.parse(String(existing.result_json)) as T
+        db.exec('COMMIT')
+        return result
+      }
+      const result = work()
+      db.prepare('INSERT INTO operation_results(branch_id,operation_id,kind,request_hash,result_json,occurred_at) VALUES (?,?,?,?,?,?)').run(branchId, id, kind, hash, JSON.stringify(result), occurredAt)
       db.exec('COMMIT')
       return result
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
     }
-    const result = work()
-    db.prepare('INSERT INTO operation_results(branch_id,operation_id,kind,request_hash,result_json,occurred_at) VALUES (?,?,?,?,?,?)').run(branchId, id, kind, hash, JSON.stringify(result), occurredAt)
-    db.exec('COMMIT')
-    return result
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
+  })
 }
 
 // Keep existing human-readable formats, but never derive numbers from row counts.

@@ -34,6 +34,7 @@ export type ReportTopProduct = { productId: string; name: string; category: stri
 export type ReportStaffSale = { userId: string; name: string; invoiceCount: number; salesPaisa: number; returnsPaisa: number; netSalesPaisa: number }
 export type ReportRecentSale = { id: string; invoiceNumber: string; completedAt: string; customerName: string; paymentMethod: string; totalPaisa: number; status: string }
 export type ReportExpenseCategory = { category: string; netPaisa: number }
+export type ReportCounterSale = { counterId: string; counterNumber: number; name: string; invoiceCount: number; salesPaisa: number; returnsPaisa: number; netSalesPaisa: number }
 export type ReportSnapshot = {
   businessName: string
   branchNames: string[]
@@ -48,5 +49,6 @@ export type ReportSnapshot = {
   staffSales: ReportStaffSale[]
   recentSales: ReportRecentSale[]
   expenseByCategory: ReportExpenseCategory[]
+  byCounter?: ReportCounterSale[]
   table: ReportTable
 }

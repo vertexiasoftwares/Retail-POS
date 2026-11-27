@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { changeStockValue, proportionalCost, stockCost } from './valuation.mjs'
 import type { DatabaseSync } from 'node:sqlite'
 import type { ProductCatalogRecord, PurchaseReceiveRequest, PurchaseReceiveResult, RetailPaymentMethod, RetailSnapshot, StockAdjustmentRequest, SupplierDeleteRequest, SupplierDeleteResult, SupplierPayRequest } from '../../src/types/desktop-api.js'
+import { getActiveCounterId } from './context.mjs'
 import { nextDocumentNumber, postOperation, requireBusinessDate, requireSafeInteger, requireText } from './posting.mjs'
+import { enqueueOutboxEvent } from '../sync/outbox.mjs'
 
 type Row = Record<string, string | number | null>
 const methods = new Set<RetailPaymentMethod>(['Cash', 'Bank Transfer', 'JazzCash', 'Easypaisa', 'Card'])
@@ -72,9 +74,32 @@ export class RetailRepository {
       this.db.prepare(`INSERT INTO stock_levels(branch_id,product_id,quantity_milli,updated_at) VALUES (?,?,?,?)
         ON CONFLICT(branch_id,product_id) DO UPDATE SET quantity_milli=excluded.quantity_milli,updated_at=excluded.updated_at`).run(request.branchId, request.productId, balance, time)
       const type = request.quantityDeltaMilli > 0 ? 'adjustment_increase' : 'adjustment_decrease'
-      this.db.prepare('INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, request.branchId, request.productId, type, request.quantityDeltaMilli, balance, 'stock_adjustment', id, reason, time)
+      const counterId = getActiveCounterId()
+      this.db.prepare('INSERT INTO stock_movements(id,branch_id,product_id,movement_type,quantity_delta_milli,balance_after_milli,reference_type,reference_id,reason,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, request.branchId, request.productId, type, request.quantityDeltaMilli, balance, 'stock_adjustment', id, reason, time)
+      this.db.prepare("INSERT OR REPLACE INTO movement_origins(movement_id,origin_source,counter_id) VALUES (?,'local',?)").run(id, counterId)
       changeStockValue(this.db,request.branchId,request.productId,valueDelta,request.quantityDeltaMilli>0,time,id)
       this.audit(request.branchId, 'Inventory', id, reason, String(product.name), time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'stock_movement',
+        entityId: id,
+        operation: 'adjust',
+        counterId,
+        occurredAt: time,
+        payload: {
+          id,
+          branchId: request.branchId,
+          productId: request.productId,
+          movementType: type,
+          quantityDeltaMilli: request.quantityDeltaMilli,
+          balanceAfterMilli: balance,
+          referenceType: 'stock_adjustment',
+          referenceId: id,
+          originSource: 'local',
+          counterId,
+          note: reason,
+          occurredAt: time,
+        },
+      })
       return { movementId: id, balanceAfterMilli: balance }
     })
   }
@@ -109,32 +134,89 @@ export class RetailRepository {
       const time = this.now().toISOString()
       let supplier = this.db.prepare('SELECT id,is_active FROM suppliers WHERE business_id=? AND name=? COLLATE NOCASE ORDER BY rowid LIMIT 1').get(this.businessId, name)
       if (supplier && Number(supplier.is_active) !== 1) throw new Error('This supplier is inactive.')
+      let createdSupplierId: string | null = null
       if (!supplier) {
         const id = newId('supplier')
         this.db.prepare('INSERT INTO suppliers(id,business_id,name,phone,is_active,created_at) VALUES (?,?,?,?,?,?)').run(id, this.businessId, name, null, 1, time)
         supplier = { id, is_active: 1 }
+        createdSupplierId = id
       }
       const supplierId = String(supplier.id)
+      const counterId = getActiveCounterId()
+      if (createdSupplierId) {
+        enqueueOutboxEvent(this.db, {
+          entityType: 'supplier',
+          entityId: supplierId,
+          operation: 'upsert',
+          counterId,
+          occurredAt: time,
+          payload: { id: supplierId, businessId: this.businessId, branchId: request.branchId, name, phone: '', isActive: true, syncVersion: 1, createdAt: time },
+        })
+      }
       if (invoice && this.db.prepare('SELECT id FROM purchases WHERE business_id=? AND supplier_id=? AND supplier_invoice_number=? COLLATE NOCASE').get(this.businessId, supplierId, invoice)) throw new Error('This supplier invoice has already been received.')
       const id = newId('purchase'), number = nextDocumentNumber(this.db, request.branchId, 'purchase', date)
       this.db.prepare('INSERT INTO purchases VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, this.businessId, request.branchId, supplierId, name, number, invoice, date, total, time)
+      const stockMovementEvents: Array<Record<string, unknown>> = []
       for (const line of lines) {
         const productId = String(line.product.id), balance = Number(line.product.quantity_milli) + line.quantity
         this.db.prepare('INSERT INTO purchase_items VALUES (?,?,?,?,?,?,?)').run(newId('purchase-item'), id, productId, String(line.product.name), line.quantity, line.cost, line.total)
         this.db.prepare(`INSERT INTO stock_levels(branch_id,product_id,quantity_milli,updated_at) VALUES (?,?,?,?)
           ON CONFLICT(branch_id,product_id) DO UPDATE SET quantity_milli=excluded.quantity_milli,updated_at=excluded.updated_at`).run(request.branchId, productId, balance, time)
         const movementId = newId('stock')
-        this.db.prepare('INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?,?,?)').run(movementId, request.branchId, productId, 'purchase', line.quantity, balance, 'purchase', id, `Purchase ${number} from ${name}`, time)
+        this.db.prepare('INSERT INTO stock_movements(id,branch_id,product_id,movement_type,quantity_delta_milli,balance_after_milli,reference_type,reference_id,reason,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(movementId, request.branchId, productId, 'purchase', line.quantity, balance, 'purchase', id, `Purchase ${number} from ${name}`, time)
+        this.db.prepare("INSERT OR REPLACE INTO movement_origins(movement_id,origin_source,counter_id) VALUES (?,'local',?)").run(movementId, counterId)
         changeStockValue(this.db,request.branchId,productId,line.total,false,time,movementId)
         // Catalog cost is a reference; valuation and sale cost use the branch basis.
         this.db.prepare('UPDATE products SET purchase_price_paisa=?,updated_at=? WHERE id=? AND business_id=?').run(line.cost, time, productId, this.businessId)
+        stockMovementEvents.push({
+          id: movementId,
+          branchId: request.branchId,
+          productId,
+          movementType: 'purchase',
+          quantityDeltaMilli: line.quantity,
+          balanceAfterMilli: balance,
+          unitCostPaisa: line.cost,
+          lineTotalPaisa: line.total,
+          referenceType: 'purchase',
+          referenceId: id,
+          originSource: 'local',
+          counterId,
+          note: `Purchase ${number} from ${name}`,
+          occurredAt: time,
+        })
       }
       this.db.prepare('INSERT INTO supplier_ledger VALUES (?,?,?,?,?,?,?,?)').run(newId('supplier-ledger'), request.branchId, supplierId, 'purchase', total, 0, id, time)
+      let paidId: string | null = null
       if (request.paidAmountPaisa > 0) {
         const paymentId = this.payment(request.branchId, supplierId, request.paidAmountPaisa, request.paymentMethod, number, date, time)
+        paidId = paymentId
         this.db.prepare('INSERT INTO supplier_payment_allocations VALUES (?,?,?)').run(paymentId, id, request.paidAmountPaisa)
       }
       this.audit(request.branchId, 'Purchase', id, 'Purchase received', number, time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'purchase',
+        entityId: id,
+        operation: 'create',
+        counterId,
+        occurredAt: time,
+        payload: {
+          id,
+          businessId: this.businessId,
+          branchId: request.branchId,
+          supplierId,
+          supplierName: name,
+          purchaseNumber: number,
+          businessDate: date,
+          totalPaisa: total,
+          paidPaisa: request.paidAmountPaisa,
+          paymentMethod: request.paymentMethod,
+          paymentId: paidId,
+          note: invoice,
+          createdBy: this.actorId(),
+          occurredAt: time,
+          stockMovements: stockMovementEvents,
+        },
+      })
       return { purchaseId: id, purchaseNumber: number, supplierId, totalPaisa: total }
     })
   }
@@ -195,6 +277,25 @@ export class RetailRepository {
         this.audit(ledgerBranchId, 'Supplier', id, 'Supplier created', name, time)
       }
 
+      enqueueOutboxEvent(this.db, {
+        entityType: 'supplier',
+        entityId: id,
+        operation: 'upsert',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id,
+          businessId: this.businessId,
+          branchId: ledgerBranchId,
+          name,
+          phone: p || '',
+          openingBalancePaisa,
+          isActive: true,
+          syncVersion: 1,
+          createdAt: time,
+        },
+      })
+
       return { id, name }
     }
 
@@ -247,6 +348,25 @@ export class RetailRepository {
         remaining -= allocated
       }
       this.audit(request.branchId, 'Payment', id, 'Supplier payment posted', reference, time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'supplier_payment',
+        entityId: id,
+        operation: 'create',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id,
+          branchId: request.branchId,
+          supplierId: request.supplierId,
+          paymentNumber: id,
+          businessDate: retailBusinessDate(this.now()),
+          method: request.method,
+          amountPaisa: amount,
+          note: reference,
+          createdBy: this.actorId(),
+          occurredAt: time,
+        },
+      })
       return { paymentId: id, outstandingPaisa: due - amount }
     })
   }
@@ -277,6 +397,14 @@ export class RetailRepository {
         }
         this.db.prepare('UPDATE suppliers SET is_active=0 WHERE id=? AND business_id=?').run(request.supplierId, this.businessId)
         this.audit(request.branchId, 'Supplier', request.supplierId, 'Supplier deactivated', String(supplier.name), time)
+        enqueueOutboxEvent(this.db, {
+          entityType: 'supplier',
+          entityId: request.supplierId,
+          operation: 'deactivate',
+          counterId: getActiveCounterId(),
+          occurredAt: time,
+          payload: { id: request.supplierId, businessId: this.businessId, name: String(supplier.name), isActive: false },
+        })
         return { deleted: false, archived: true }
       }
 
@@ -284,6 +412,14 @@ export class RetailRepository {
       this.db.prepare('DELETE FROM supplier_profiles WHERE supplier_id=?').run(request.supplierId)
       this.db.prepare('DELETE FROM suppliers WHERE id=? AND business_id=?').run(request.supplierId, this.businessId)
       this.audit(request.branchId, 'Supplier', request.supplierId, 'Supplier deleted', String(supplier.name), time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'supplier',
+        entityId: request.supplierId,
+        operation: 'delete',
+        counterId: getActiveCounterId(),
+        occurredAt: time,
+        payload: { id: request.supplierId, businessId: this.businessId, isActive: false, deleted: true },
+      })
       return { deleted: true, archived: false }
     })
   }

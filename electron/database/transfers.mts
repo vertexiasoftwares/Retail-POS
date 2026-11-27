@@ -66,7 +66,7 @@ export class TransferRepository {
         this.db.prepare('INSERT INTO stock_transfer_items VALUES (?,?,?,?,?,?,?,?)').run(id,productId,String(line.product.name),String(line.product.sku),String(line.product.unit),line.quantityMilli,line.costPaisa,Number(line.estimated))
         const updated=this.db.prepare('UPDATE stock_levels SET quantity_milli=?,updated_at=? WHERE branch_id=? AND product_id=? AND quantity_milli>=?').run(balance,time,request.branchId,productId,line.quantityMilli)
         if(updated.changes!==1)throw new Error('Source stock changed. Refresh before dispatching.')
-        this.db.prepare('INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?,?,?)').run(movementId,request.branchId,productId,'transfer_out',-line.quantityMilli,balance,'stock_transfer',id,number,time)
+        this.db.prepare('INSERT INTO stock_movements(id,branch_id,product_id,movement_type,quantity_delta_milli,balance_after_milli,reference_type,reference_id,reason,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(movementId,request.branchId,productId,'transfer_out',-line.quantityMilli,balance,'stock_transfer',id,number,time)
         changeStockValue(this.db,request.branchId,productId,-line.costPaisa,false,time,movementId)
       }
       this.audit(request.branchId,id,'Stock dispatched to branch',number,time)
@@ -79,12 +79,12 @@ export class TransferRepository {
       const productId=String(line.product_id),quantity=Number(line.quantity_milli),movementId='stock-'+randomUUID()
       // Receipt remains possible if the catalog product was deactivated in transit.
       if(!this.db.prepare('SELECT 1 FROM products WHERE id=? AND business_id=?').get(productId,this.businessId))throw new Error('Transfer product no longer belongs to this business.')
-      this.db.prepare('INSERT OR IGNORE INTO stock_levels VALUES (?,?,0,?)').run(branchId,productId,time)
+      this.db.prepare('INSERT OR IGNORE INTO stock_levels(branch_id,product_id,quantity_milli,updated_at) VALUES (?,?,0,?)').run(branchId,productId,time)
       const old=this.db.prepare('SELECT quantity_milli FROM stock_levels WHERE branch_id=? AND product_id=?').get(branchId,productId)!
       if(Number(old.quantity_milli)>0&&!this.db.prepare('SELECT 1 FROM stock_values WHERE branch_id=? AND product_id=?').get(branchId,productId))throw new Error('Destination stock valuation is missing. Contact support.')
       const balance=requireSafeInteger(Number(old.quantity_milli)+quantity,'Receiving stock balance')
       this.db.prepare('UPDATE stock_levels SET quantity_milli=?,updated_at=? WHERE branch_id=? AND product_id=?').run(balance,time,branchId,productId)
-      this.db.prepare('INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?,?,?)').run(movementId,branchId,productId,type,quantity,balance,'stock_transfer',transferId,number,time)
+      this.db.prepare('INSERT INTO stock_movements(id,branch_id,product_id,movement_type,quantity_delta_milli,balance_after_milli,reference_type,reference_id,reason,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(movementId,branchId,productId,type,quantity,balance,'stock_transfer',transferId,number,time)
       changeStockValue(this.db,branchId,productId,Number(line.cost_paisa),Number(line.estimated)===1,time,movementId)
     }
   }

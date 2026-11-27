@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type { CashCloseRequest, CashForceCloseRequest, CashMoveRequest, CashShiftRecord, CashSnapshot } from '../../src/types/recovery.js'
+import { getActiveCounterId } from './context.mjs'
 import { postOperation, requireSafeInteger, requireText } from './posting.mjs'
 import { retailBusinessDate } from './retail.mjs'
+import { enqueueOutboxEvent } from '../sync/outbox.mjs'
 
 type Row = Record<string, string | number | null>
 export class CashRepository {
@@ -49,7 +51,8 @@ export class CashRepository {
     const targetUserId = isManagerOrOwner ? userId : (userId ?? actorId)
     const rows = this.db.prepare(`SELECT s.*,s.note AS shift_note,u.name AS cashier_name,c.counted_cash_paisa,c.expected_cash_paisa,c.variance_paisa,c.note,cu.name AS closed_by_name FROM cash_shifts s JOIN users u ON u.id=s.cashier_id LEFT JOIN cash_shift_closings c ON c.shift_id=s.id LEFT JOIN users cu ON cu.id=c.closed_by WHERE s.branch_id=? ${targetUserId ? 'AND s.cashier_id=?' : ''} ORDER BY s.opened_at DESC,s.rowid DESC LIMIT 100`).all(...(targetUserId ? [branchId, targetUserId] : [branchId])) as Row[]
     const shifts = rows.map(row => this.record(row))
-    const activeShift = shifts.find(shift => shift.status === 'open') ?? null
+    const activeShifts = shifts.filter(shift => shift.status === 'open')
+    const activeShift = activeShifts[0] ?? null
     const selected = activeShift ?? shifts[0]
     const movements = selected ? (this.db.prepare(`
       SELECT
@@ -162,7 +165,7 @@ export class CashRepository {
       }
     }) : []
     const movementCount = selected ? Number(this.db.prepare('SELECT COUNT(*) AS n FROM cash_transactions WHERE shift_id=?').get(selected.id)!.n) : 0
-    return { activeShift, shifts, movements, movementCount }
+    return { activeShift, activeShifts, shifts, movements, movementCount }
   }
   close(request: CashCloseRequest): CashShiftRecord {
     if (!request || typeof request !== 'object') throw new Error('Invalid shift closing.')
@@ -172,7 +175,7 @@ export class CashRepository {
     return postOperation(this.db, request.branchId, request.operationId, 'shift.close', request, this.now().toISOString(), () => {
       this.active(request.branchId, request.shiftId)
       const actorId = this.actor()
-      const shift = this.db.prepare('SELECT cashier_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, request.branchId) as Row | undefined
+      const shift = this.db.prepare('SELECT cashier_id, counter_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, request.branchId) as Row | undefined
       if (!shift) throw new Error('Invalid cash shift.')
       if (shift.cashier_id !== actorId) {
         const user = this.db.prepare('SELECT role FROM users WHERE id=?').get(actorId) as Row | undefined
@@ -187,7 +190,16 @@ export class CashRepository {
       this.db.prepare('INSERT INTO cash_shift_closings VALUES (?,?,?,?,?,?,?)').run(request.shiftId, counted, expected, variance, note, actorId, time)
       this.db.prepare("UPDATE cash_shifts SET status='closed',closed_at=? WHERE id=?").run(time, request.shiftId)
       this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Shift', 'cash_shift', request.shiftId, 'Cash shift closed and reconciled', `Variance paisa: ${variance}`, time)
-      return this.snapshot(request.branchId).shifts.find(shift => shift.id === request.shiftId)!
+      const closedRecord = this.snapshot(request.branchId).shifts.find(s => s.id === request.shiftId)!
+      enqueueOutboxEvent(this.db, {
+        entityType: 'cash_shift',
+        entityId: request.shiftId,
+        operation: 'close',
+        counterId: shift.counter_id ? String(shift.counter_id) : getActiveCounterId(),
+        occurredAt: time,
+        payload: { ...closedRecord },
+      })
+      return closedRecord
     })
   }
   move(request: CashMoveRequest): { transactionId: string; expectedCashPaisa: number } {
@@ -199,7 +211,7 @@ export class CashRepository {
     return postOperation(this.db, request.branchId, request.operationId, 'cash.move', request, this.now().toISOString(), () => {
       this.active(request.branchId, request.shiftId)
       const actorId = this.actor()
-      const shift = this.db.prepare('SELECT cashier_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, request.branchId) as Row | undefined
+      const shift = this.db.prepare('SELECT cashier_id, counter_id FROM cash_shifts WHERE id=? AND branch_id=?').get(request.shiftId, request.branchId) as Row | undefined
       if (!shift) throw new Error('Invalid cash shift.')
       if (shift.cashier_id !== actorId) {
         const user = this.db.prepare('SELECT role FROM users WHERE id=?').get(actorId) as Row | undefined
@@ -210,9 +222,28 @@ export class CashRepository {
       const next = this.expected(request.shiftId) + (request.direction === 'in' ? amount : -amount)
       requireSafeInteger(next, 'Resulting drawer cash')
       const id = `cash-${randomUUID()}`, time = this.now().toISOString()
-      this.db.prepare('INSERT INTO cash_transactions VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, request.shiftId, request.branchId, retailBusinessDate(this.now()), request.direction === 'in' ? 'cash_in' : 'withdrawal', request.direction, amount, 'Cash', id, time)
-      this.db.prepare('INSERT INTO cash_movement_notes VALUES (?,?,?)').run(id, reason, actorId)
+      const movementType = request.direction === 'in' ? 'cash_in' : 'withdrawal'
+      this.db.prepare('INSERT INTO cash_transactions VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, request.shiftId, request.branchId, retailBusinessDate(this.now()), movementType, request.direction, amount, 'Cash', id, time)
+      this.db.prepare('INSERT INTO cash_movement_notes(transaction_id, reason, created_by) VALUES (?,?,?)').run(id, reason, actorId)
       this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Cash', 'cash_transaction', id, reason, `${request.direction} ${amount} paisa`, time)
+      enqueueOutboxEvent(this.db, {
+        entityType: 'cash_movement',
+        entityId: id,
+        operation: 'create',
+        counterId: shift.counter_id ? String(shift.counter_id) : getActiveCounterId(),
+        occurredAt: time,
+        payload: {
+          id,
+          shiftId: request.shiftId,
+          branchId: request.branchId,
+          movementType,
+          direction: request.direction,
+          amountPaisa: request.direction === 'in' ? amount : -amount,
+          reason,
+          createdBy: actorId,
+          occurredAt: time,
+        },
+      })
       return { transactionId: id, expectedCashPaisa: next }
     })
   }
@@ -236,7 +267,16 @@ export class CashRepository {
       this.db.prepare('INSERT INTO cash_shift_closings VALUES (?,?,?,?,?,?,?)').run(request.shiftId, expected, expected, 0, closeNote, actorId, time)
       this.db.prepare("UPDATE cash_shifts SET status='closed', closed_at=?, close_reason=? WHERE id=?").run(time, reason, request.shiftId)
       this.db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)').run(`audit-${randomUUID()}`, request.branchId, actorId, 'Shift', 'cash_shift', request.shiftId, 'Shift force-closed by manager', `Reason: ${reason}`, time)
-      return this.snapshot(request.branchId).shifts.find(s => s.id === request.shiftId)!
+      const closedRecord = this.snapshot(request.branchId).shifts.find(s => s.id === request.shiftId)!
+      enqueueOutboxEvent(this.db, {
+        entityType: 'cash_shift',
+        entityId: request.shiftId,
+        operation: 'force_close',
+        counterId: shift.counter_id ? String(shift.counter_id) : 'counter-1',
+        occurredAt: time,
+        payload: { ...closedRecord },
+      })
+      return closedRecord
     })
   }
 }
