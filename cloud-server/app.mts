@@ -38,8 +38,69 @@ export async function createCloudServer(options: CloudAppOptions = {}): Promise<
   const tenantManager = new TenantDatabaseManager(config, centralPool)
   const realtime = new CloudRealtimeBroker(centralPool)
 
+  const loggerOption =
+    options.logger === false || config.nodeEnv === 'test'
+      ? false
+      : {
+          serializers: {
+            req(req: { method?: string; url?: string }) {
+              return {
+                method: req.method,
+                url: typeof req.url === 'string' ? req.url.split('?')[0] : '',
+              }
+            },
+          },
+        }
+
   const app = fastify({
-    logger: options.logger ?? config.nodeEnv !== 'test',
+    logger: loggerOption,
+  })
+
+  const allowedOrigins = new Set(
+    (config.corsOrigins || [])
+      .map(origin => origin.trim())
+      .filter(Boolean),
+  )
+
+  app.addHook('onRequest', async (request, reply) => {
+    reply.header('Vary', 'Origin')
+    const rawOrigin = request.headers.origin
+    const origin = typeof rawOrigin === 'string' ? rawOrigin.trim() : ''
+
+    if (request.method === 'OPTIONS') {
+      if (!origin || !allowedOrigins.has(origin)) {
+        return reply.status(403).send({
+          error: 'CorsForbidden',
+          message: 'Origin is not allowed by the Cloud Gateway CORS policy.',
+          statusCode: 403,
+        })
+      }
+      reply
+        .header('Access-Control-Allow-Origin', origin)
+        .header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
+        .header('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        .header('Access-Control-Allow-Credentials', 'true')
+        .header('Access-Control-Max-Age', '86400')
+      return reply.status(204).send()
+    }
+
+    if (origin) {
+      if (!allowedOrigins.has(origin)) {
+        if (request.url.startsWith('/api/cloud/')) {
+          return reply.status(403).send({
+            error: 'CorsForbidden',
+            message: 'Origin is not allowed by the Cloud Gateway CORS policy.',
+            statusCode: 403,
+          })
+        }
+        return
+      }
+      reply
+        .header('Access-Control-Allow-Origin', origin)
+        .header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
+        .header('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        .header('Access-Control-Allow-Credentials', 'true')
+    }
   })
 
   // Preserve exact raw JSON body string for HMAC-SHA256 verification on node sync routes
@@ -58,7 +119,8 @@ export async function createCloudServer(options: CloudAppOptions = {}): Promise<
     const error = err as { name?: string; message?: string; statusCode?: number }
     const statusCode =
       typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 500
-    app.log.error({ err, url: request.url }, 'Cloud API error')
+    const safePath = typeof request.url === 'string' ? request.url.split('?')[0] : ''
+    app.log.error({ err, url: safePath }, 'Cloud API error')
     reply.status(statusCode).send({
       error: error.name || 'CloudError',
       message: error.message || 'Cloud server error.',
@@ -79,7 +141,7 @@ export async function createCloudServer(options: CloudAppOptions = {}): Promise<
     void realtime.handleUpgrade(req, socket as any)
   })
 
-  registerCloudAuthRoutes(app, centralPool)
+  registerCloudAuthRoutes(app, centralPool, tenantManager)
   registerCloudSyncRoutes(app, config, centralPool, tenantManager, realtime)
   registerRemoteOwnerRoutes(app, centralPool, tenantManager, realtime)
   registerCloudBackupRoutes(app, config, centralPool, tenantManager)

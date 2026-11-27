@@ -1,0 +1,20 @@
+{
+  "id": "/?source=pwa",
+  "name": "Vertexia Remote Owner Console",
+  "short_name": "Vertexia Owner",
+  "description": "Cloud remote dashboard, live sales monitoring, inventory control, and backups for Vertexia Retail POS.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#17082b",
+  "theme_color": "#17082b",
+  "icons": [
+    {
+      "src": "/retail-pos-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

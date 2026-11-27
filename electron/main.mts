@@ -732,6 +732,9 @@ app.whenReady().then(async () => {
     syncEngine = new HybridSyncEngine({
       db: database.connection,
       appVersion: app.getVersion(),
+      onUsersReconciled: userIds => {
+        auth?.purgeMemorySessionsForUsers(userIds)
+      },
     })
     let serverBound = false
     try {

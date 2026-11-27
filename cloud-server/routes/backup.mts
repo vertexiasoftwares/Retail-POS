@@ -1,11 +1,25 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
 import type { CloudEnvConfig } from '../config/env.mjs'
 import type { TenantDatabaseManager } from '../db/tenant-manager.mjs'
 import { enforceCloudOwner } from './auth.mjs'
+
+const BACKUP_FILE_RE = /^[a-zA-Z0-9._-]+\.json$/
+
+function resolveSafeShopBackupFile(backupDir: string, shopUuid: string, fileName: string): { fileName: string; filePath: string } | null {
+  if (!BACKUP_FILE_RE.test(fileName) || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
+    return null
+  }
+  const shopDir = resolve(backupDir, shopUuid)
+  const filePath = resolve(shopDir, fileName)
+  if (!filePath.startsWith(shopDir + sep)) {
+    return null
+  }
+  return { fileName, filePath }
+}
 
 const BACKUP_TABLES = [
   'branches',
@@ -85,22 +99,22 @@ export function registerCloudBackupRoutes(
     const shopDir = join(config.backupDir, session.shopUuid)
     try {
       const files = readdirSync(shopDir).filter(f => f.endsWith('.json'))
-      return {
-        records: files.map(fileName => {
-          const full = join(shopDir, fileName)
-          const st = statSync(full)
-          let checksum = ''
-          try {
-            checksum = readFileSync(`${full}.sha256`, 'utf8').trim()
-          } catch {}
-          return {
-            fileName,
-            sizeBytes: st.size,
-            checksum,
-            createdAt: st.mtime.toISOString(),
-          }
-        }),
-      }
+      const records = files.map(fileName => {
+        const full = join(shopDir, fileName)
+        const st = statSync(full)
+        let checksum = ''
+        try {
+          checksum = readFileSync(`${full}.sha256`, 'utf8').trim()
+        } catch {}
+        return {
+          fileName,
+          sizeBytes: st.size,
+          checksum,
+          createdAt: st.mtime.toISOString(),
+        }
+      })
+      records.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      return { records }
     } catch {
       return { records: [] }
     }
@@ -113,17 +127,53 @@ export function registerCloudBackupRoutes(
     const session = await enforceCloudOwner(request, reply, centralPool, 'backup.manage', q.shopUuid)
     if (!session) return
 
-    if (!/^[a-zA-Z0-9._-]+\.json$/.test(params.file)) {
+    const safe = resolveSafeShopBackupFile(config.backupDir, session.shopUuid, params.file)
+    if (!safe) {
       return reply.status(400).send({ error: 'InvalidFilename', message: 'Invalid backup filename.', statusCode: 400 })
     }
-    const full = join(config.backupDir, session.shopUuid, params.file)
     try {
-      const raw = readFileSync(full, 'utf8')
+      const raw = readFileSync(safe.filePath, 'utf8')
       const actual = createHash('sha256').update(raw).digest('hex')
-      const expected = readFileSync(`${full}.sha256`, 'utf8').trim()
+      const expected = readFileSync(`${safe.filePath}.sha256`, 'utf8').trim()
       const parsed = JSON.parse(raw) as { shopUuid?: string; format?: string }
       const valid = actual === expected && parsed.shopUuid === session.shopUuid && parsed.format === 'vertexia-cloud-tenant-backup-v1'
       return { valid, checksum: actual, expectedChecksum: expected }
+    } catch (err: any) {
+      return reply.status(404).send({ error: 'BackupNotFound', message: err?.message || 'Backup file missing.', statusCode: 404 })
+    }
+  })
+
+  // GET /api/cloud/owner/backups/:file/download
+  app.get('/api/cloud/owner/backups/:file/download', async (request, reply) => {
+    const params = request.params as { file: string }
+    const q = request.query as { shopUuid?: string }
+    const session = await enforceCloudOwner(request, reply, centralPool, 'backup.manage', q.shopUuid)
+    if (!session) return
+
+    const safe = resolveSafeShopBackupFile(config.backupDir, session.shopUuid, params.file)
+    if (!safe) {
+      return reply.status(400).send({ error: 'InvalidFilename', message: 'Invalid backup filename.', statusCode: 400 })
+    }
+
+    try {
+      const raw = readFileSync(safe.filePath, 'utf8')
+      const actual = createHash('sha256').update(raw).digest('hex')
+      const expected = readFileSync(`${safe.filePath}.sha256`, 'utf8').trim()
+      const parsed = JSON.parse(raw) as { shopUuid?: string; format?: string }
+      if (parsed.shopUuid !== session.shopUuid || parsed.format !== 'vertexia-cloud-tenant-backup-v1' || actual !== expected) {
+        return reply.status(409).send({
+          error: 'BackupIntegrityError',
+          message: 'Cloud backup checksum or tenant ownership check failed.',
+          statusCode: 409,
+        })
+      }
+
+      return reply
+        .header('Content-Type', 'application/json; charset=utf-8')
+        .header('Content-Disposition', `attachment; filename="${safe.fileName}"`)
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('X-Backup-Checksum-Sha256', actual)
+        .send(raw)
     } catch (err: any) {
       return reply.status(404).send({ error: 'BackupNotFound', message: err?.message || 'Backup file missing.', statusCode: 404 })
     }

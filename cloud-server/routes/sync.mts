@@ -232,15 +232,23 @@ export function registerCloudSyncRoutes(
           id, shop_uuid, branch_id, username, name, role, password_hash,
           credential_version, is_active, must_change_password, updated_at
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (shop_uuid, id) DO UPDATE SET
           branch_id = EXCLUDED.branch_id,
           username = EXCLUDED.username,
           name = EXCLUDED.name,
           role = EXCLUDED.role,
-          password_hash = EXCLUDED.password_hash,
+          password_hash = CASE
+            WHEN EXCLUDED.credential_version >= vtx_central.central_users.credential_version
+            THEN EXCLUDED.password_hash
+            ELSE vtx_central.central_users.password_hash
+          END,
           credential_version = GREATEST(vtx_central.central_users.credential_version, EXCLUDED.credential_version),
           is_active = EXCLUDED.is_active,
-          must_change_password = EXCLUDED.must_change_password,
+          must_change_password = CASE
+            WHEN EXCLUDED.credential_version >= vtx_central.central_users.credential_version
+            THEN EXCLUDED.must_change_password
+            ELSE vtx_central.central_users.must_change_password
+          END,
           updated_at = NOW()`,
         [
           u.userId,

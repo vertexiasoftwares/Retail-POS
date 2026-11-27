@@ -1,16 +1,49 @@
-import { createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Pool } from 'pg'
 import { isUserRole, rolePermissions } from '../../src/shared/auth-policy.js'
 import type { Permission, UserRole } from '../../src/types/auth.js'
 import type { CloudEnvConfig } from '../config/env.mjs'
-import { normalizeShopUuid } from '../db/tenant-manager.mjs'
+import { normalizeShopUuid, type TenantDatabaseManager } from '../db/tenant-manager.mjs'
 
 const HASH_OPTIONS = { N: 131072, r: 8, p: 1, maxmem: 160 * 1024 * 1024 }
 const DUMMY_HASH = `scrypt-v1$${'00'.repeat(16)}$${'00'.repeat(64)}`
 const CLOUD_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const HMAC_MAX_SKEW_MS = 5 * 60 * 1000
 const MAX_SCRYPT_CONCURRENCY = 2
+const AUTH_RATE_WINDOW_MS = 5 * 60 * 1000
+const AUTH_RATE_MAX_FAILURES = 20
+
+const authFailures = new Map<string, { count: number; resetAt: number }>()
+
+export function resetCloudAuthRateLimits(): void {
+  authFailures.clear()
+}
+
+function getAuthThrottleRemainingMs(key: string): number {
+  const entry = authFailures.get(key)
+  if (!entry) return 0
+  const now = Date.now()
+  if (now >= entry.resetAt) {
+    authFailures.delete(key)
+    return 0
+  }
+  return entry.count >= AUTH_RATE_MAX_FAILURES ? entry.resetAt - now : 0
+}
+
+function recordAuthFailure(key: string): void {
+  const now = Date.now()
+  const existing = authFailures.get(key)
+  if (!existing || now >= existing.resetAt) {
+    authFailures.set(key, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS })
+  } else {
+    existing.count += 1
+  }
+}
+
+function clearAuthFailures(key: string): void {
+  authFailures.delete(key)
+}
 
 let activeScrypt = 0
 const scryptQueue: Array<() => void> = []
@@ -238,7 +271,11 @@ export async function enforceCloudOwner(
   return result.session
 }
 
-export function registerCloudAuthRoutes(app: FastifyInstance, centralPool: Pool): void {
+export function registerCloudAuthRoutes(
+  app: FastifyInstance,
+  centralPool: Pool,
+  tenantManager?: TenantDatabaseManager,
+): void {
   // POST /api/cloud/auth/login
   app.post('/api/cloud/auth/login', async (request, reply) => {
     const body = request.body as {
@@ -253,6 +290,17 @@ export function registerCloudAuthRoutes(app: FastifyInstance, centralPool: Pool)
     }
 
     const login = body.username.trim().toLowerCase()
+    const rateKey = `login:${request.ip}:${login}`
+    const retryMs = getAuthThrottleRemainingMs(rateKey)
+    if (retryMs > 0) {
+      reply.header('Retry-After', String(Math.max(1, Math.ceil(retryMs / 1000))))
+      return reply.status(429).send({
+        error: 'RateLimited',
+        message: 'Too many failed sign-in attempts. Please wait a few minutes and try again.',
+        statusCode: 429,
+      })
+    }
+
     const params: unknown[] = [login]
     let sql = `SELECT u.*, b.name AS shop_name FROM vtx_central.central_users u JOIN vtx_central.businesses b ON b.shop_uuid = u.shop_uuid WHERE u.username = $1`
     if (body.shopUuid) {
@@ -292,8 +340,10 @@ export function registerCloudAuthRoutes(app: FastifyInstance, centralPool: Pool)
     const user = rows[0]
     const ok = user ? await verifyScryptPassword(body.password, user.password_hash) : await verifyScryptPassword(body.password, DUMMY_HASH)
     if (!ok || !user || !user.is_active || !isUserRole(user.role)) {
+      recordAuthFailure(rateKey)
       return reply.status(401).send({ error: 'AuthError', message: 'Invalid username or password.', statusCode: 401 })
     }
+    clearAuthFailures(rateKey)
 
     const rawToken = randomBytes(32).toString('hex')
     const tokenHash = sha256Hex(rawToken)
@@ -306,9 +356,10 @@ export function registerCloudAuthRoutes(app: FastifyInstance, centralPool: Pool)
       [tokenHash, user.id, user.shop_uuid, user.role, user.credential_version, deviceType, expiresAt],
     )
 
+    const isSecure = request.headers['x-forwarded-proto'] === 'https' || request.protocol === 'https'
     reply.header(
       'Set-Cookie',
-      `vertexia_cloud_session=${encodeURIComponent(rawToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(CLOUD_SESSION_TTL_MS / 1000)}`,
+      `vertexia_cloud_session=${encodeURIComponent(rawToken)}; Path=/; HttpOnly; SameSite=Lax;${isSecure ? ' Secure;' : ''} Max-Age=${Math.floor(CLOUD_SESSION_TTL_MS / 1000)}`,
     )
 
     return {
@@ -351,26 +402,45 @@ export function registerCloudAuthRoutes(app: FastifyInstance, centralPool: Pool)
   app.post('/api/cloud/auth/change-password', async (request, reply) => {
     const session = await enforceCloudOwner(request, reply, centralPool)
     if (!session) return
+    const rateKey = `chpwd:${request.ip}:${session.userId}`
+    const retryMs = getAuthThrottleRemainingMs(rateKey)
+    if (retryMs > 0) {
+      reply.header('Retry-After', String(Math.max(1, Math.ceil(retryMs / 1000))))
+      return reply.status(429).send({
+        error: 'RateLimited',
+        message: 'Too many password verification attempts. Please wait a few minutes.',
+        statusCode: 429,
+      })
+    }
+
     const body = request.body as { currentPassword?: string; newPassword?: string } | undefined
     if (!body?.currentPassword || !body?.newPassword || body.newPassword.length < 8 || body.newPassword.length > 128) {
       return reply.status(400).send({ error: 'BadRequest', message: 'Use a new password of 8–128 characters.', statusCode: 400 })
     }
-    const { rows } = await centralPool.query<{ password_hash: string }>(
-      'SELECT password_hash FROM vtx_central.central_users WHERE id = $1 AND shop_uuid = $2',
+    const { rows } = await centralPool.query<{ password_hash: string; credential_version: number }>(
+      'SELECT password_hash, credential_version FROM vtx_central.central_users WHERE id = $1 AND shop_uuid = $2',
       [session.userId, session.shopUuid],
     )
     if (!rows.length || !(await verifyScryptPassword(body.currentPassword, rows[0].password_hash))) {
+      recordAuthFailure(rateKey)
       return reply.status(400).send({ error: 'PasswordMismatch', message: 'Current password is incorrect.', statusCode: 400 })
     }
+    clearAuthFailures(rateKey)
+
     const nextHash = await hashScryptPassword(body.newPassword)
     const token = extractBearerToken(request)
     const currentHash = token ? sha256Hex(token) : ''
-    await centralPool.query(
+    const nowIso = new Date().toISOString()
+
+    const updatedRes = await centralPool.query<{ credential_version: number }>(
       `UPDATE vtx_central.central_users
        SET password_hash = $1, credential_version = credential_version + 1, must_change_password = FALSE, updated_at = NOW()
-       WHERE id = $2 AND shop_uuid = $3`,
+       WHERE id = $2 AND shop_uuid = $3
+       RETURNING credential_version`,
       [nextHash, session.userId, session.shopUuid],
     )
+    const nextCredentialVersion = Number(updatedRes.rows[0]?.credential_version ?? rows[0].credential_version + 1)
+
     await centralPool.query(
       `UPDATE vtx_central.central_sessions
        SET revoked_at = NOW()
@@ -379,10 +449,40 @@ export function registerCloudAuthRoutes(app: FastifyInstance, centralPool: Pool)
     )
     if (currentHash) {
       await centralPool.query(
-        'UPDATE vtx_central.central_sessions SET credential_version = credential_version + 1 WHERE token_hash = $1',
-        [currentHash],
+        'UPDATE vtx_central.central_sessions SET credential_version = $2 WHERE token_hash = $1',
+        [currentHash, nextCredentialVersion],
       )
     }
-    return { ok: true }
+
+    let cloudSeq: number | null = null
+    if (tenantManager) {
+      const hasTenant = await tenantManager.resolveActiveSchema(session.shopUuid).then(() => true, () => false)
+      if (hasTenant) {
+        const evtRes = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
+          const eventId = `cevt-${randomUUID()}`
+          const { rows: evtRows } = await client.query<{ cloud_seq: string }>(
+            `INSERT INTO cloud_sync_events (event_id, origin_source, counter_id, entity_type, entity_id, operation, payload_json)
+             VALUES ($1, 'cloud_owner', 'cloud', 'user_credential', $2, 'password_change', $3)
+             RETURNING cloud_seq`,
+            [
+              eventId,
+              session.userId,
+              JSON.stringify({
+                userId: session.userId,
+                shopUuid: session.shopUuid,
+                passwordHash: nextHash,
+                credentialVersion: nextCredentialVersion,
+                mustChangePassword: false,
+                updatedAt: nowIso,
+              }),
+            ],
+          )
+          return Number(evtRows[0].cloud_seq)
+        })
+        cloudSeq = evtRes
+      }
+    }
+
+    return { ok: true, credentialVersion: nextCredentialVersion, cloudSeq }
   })
 }

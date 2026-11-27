@@ -6,9 +6,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:remote": "vite --config remote-owner/vite.config.ts",
     "dev:agency": "npm run build:electron && node scripts/local-agency.mjs",
     "dev:desktop": "npm run build:electron && node scripts/dev-desktop.mjs",
     "build": "tsc -b && vite build && npm run build:electron && npm run build:server && npm run build:cloud",
+    "build:remote": "tsc -p remote-owner/tsconfig.json --noEmit && vite build --config remote-owner/vite.config.ts",
+    "preview:remote": "vite preview --config remote-owner/vite.config.ts",
     "build:electron": "node -e \"require('node:fs').rmSync('electron-dist',{recursive:true,force:true})\" && tsc -p electron/tsconfig.json",
     "build:cloud": "node -e \"require('node:fs').rmSync('cloud-dist',{recursive:true,force:true})\" && tsc -p cloud-server/tsconfig.json",
     "start:cloud": "npm run build:cloud && node cloud-dist/cloud-server/index.mjs",

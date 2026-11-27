@@ -22,6 +22,7 @@ export interface HybridSyncOptions {
   appVersion?: string
   intervalMs?: number
   realtime?: RealtimeSyncServer
+  onUsersReconciled?: (userIds: string[]) => void
   fetchImpl?: typeof fetch
   now?: () => Date
 }
@@ -34,6 +35,7 @@ export class HybridSyncEngine implements SyncController {
   private readonly appVersion: string
   private readonly intervalMs: number
   private readonly realtime?: RealtimeSyncServer
+  private readonly onUsersReconciled?: (userIds: string[]) => void
   private readonly fetchImpl: typeof fetch
   private readonly now: () => Date
 
@@ -52,6 +54,7 @@ export class HybridSyncEngine implements SyncController {
     this.appVersion = options.appVersion || '1.0.0'
     this.intervalMs = Math.max(1_000, options.intervalMs ?? 5_000)
     this.realtime = options.realtime
+    this.onUsersReconciled = options.onUsersReconciled
     this.fetchImpl = options.fetchImpl ?? fetch
     this.now = options.now ?? (() => new Date())
   }
@@ -261,6 +264,10 @@ export class HybridSyncEngine implements SyncController {
         const reconciled = reconcileCloudEvents(this.db, events, nowIso)
         pulledCount += reconciled.appliedCount
         conflictsCount += reconciled.conflictsCount
+
+        if (reconciled.updatedUserIds.length) {
+          this.onUsersReconciled?.(reconciled.updatedUserIds)
+        }
 
         if (reconciled.updatedProductIds.length && this.realtime) {
           const biz = this.db.prepare('SELECT id FROM businesses LIMIT 1').get() as { id: string }

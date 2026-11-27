@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import { appendSyncLog, setSyncStateValue } from './outbox.mjs'
+import { appendSyncLog, getShopUuid, setSyncStateValue } from './outbox.mjs'
 import { changeStockValue, openingStockValue, proportionalCost } from '../database/valuation.mjs'
 
 export interface CloudPullEvent {
@@ -21,6 +21,7 @@ export interface ReconcileResult {
   conflictsCount: number
   lastPulledSeq: number
   updatedProductIds: string[]
+  updatedUserIds: string[]
 }
 
 type SqlRow = Record<string, string | number | null>
@@ -62,7 +63,7 @@ export function reconcileCloudEvents(
   nowIso: string,
 ): ReconcileResult {
   if (!events.length) {
-    return { appliedCount: 0, skippedCount: 0, conflictsCount: 0, lastPulledSeq: 0, updatedProductIds: [] }
+    return { appliedCount: 0, skippedCount: 0, conflictsCount: 0, lastPulledSeq: 0, updatedProductIds: [], updatedUserIds: [] }
   }
 
   let appliedCount = 0
@@ -70,6 +71,8 @@ export function reconcileCloudEvents(
   let conflictsCount = 0
   let maxSeq = 0
   const updatedProductIds = new Set<string>()
+  const updatedUserIds = new Set<string>()
+  const localShopUuid = getShopUuid(db).toLowerCase()
 
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -358,6 +361,80 @@ export function reconcileCloudEvents(
           nowIso,
           evt.entityId,
         )
+      } else if (evt.entityType === 'user_credential' && evt.operation === 'password_change') {
+        const targetUserId = String(p.userId || evt.entityId)
+        const remoteShopUuid = typeof p.shopUuid === 'string' ? p.shopUuid.toLowerCase() : ''
+        const nextHash = typeof p.passwordHash === 'string' ? p.passwordHash : ''
+        const nextVersion = Number(p.credentialVersion ?? 0)
+        const hashFormatValid = /^scrypt-v1\$[a-f0-9]{32}\$[a-f0-9]{128}$/.test(nextHash)
+
+        if (!remoteShopUuid || remoteShopUuid !== localShopUuid) {
+          conflictsCount += 1
+          recordConflict(db, {
+            entityType: 'user_credential',
+            entityId: targetUserId,
+            cloudSeq: evt.cloudSeq,
+            conflictType: 'cross_shop_rejected',
+            localSummary: `shop=${localShopUuid}`,
+            cloudSummary: `shop=${remoteShopUuid || 'missing'}`,
+            resolution: 'rejected_cross_shop_credential_event',
+            nowIso,
+          })
+        } else if (!hashFormatValid || !Number.isSafeInteger(nextVersion) || nextVersion < 1) {
+          conflictsCount += 1
+          recordConflict(db, {
+            entityType: 'user_credential',
+            entityId: targetUserId,
+            cloudSeq: evt.cloudSeq,
+            conflictType: 'invalid_credential_payload',
+            localSummary: 'expected valid scrypt-v1 hash and positive credential_version',
+            cloudSummary: `credVer=${nextVersion}`,
+            resolution: 'rejected_invalid_credential_payload',
+            nowIso,
+          })
+        } else {
+          const localCred = db
+            .prepare('SELECT user_id, credential_version, updated_at FROM user_credentials WHERE user_id = ?')
+            .get(targetUserId) as SqlRow | undefined
+          if (!localCred) {
+            conflictsCount += 1
+            recordConflict(db, {
+              entityType: 'user_credential',
+              entityId: targetUserId,
+              cloudSeq: evt.cloudSeq,
+              conflictType: 'missing_local_user',
+              localSummary: 'user_credentials row not found',
+              cloudSummary: `credVer=${nextVersion}`,
+              resolution: 'skipped_unknown_user',
+              nowIso,
+            })
+          } else if (nextVersion <= Number(localCred.credential_version)) {
+            conflictsCount += 1
+            recordConflict(db, {
+              entityType: 'user_credential',
+              entityId: targetUserId,
+              cloudSeq: evt.cloudSeq,
+              conflictType: 'stale_credential_version',
+              localSummary: `local_cred_ver=${localCred.credential_version}`,
+              cloudSummary: `cloud_cred_ver=${nextVersion}`,
+              resolution: 'kept_local_newer_credential',
+              nowIso,
+            })
+          } else {
+            const mustChange = p.mustChangePassword === true ? 1 : 0
+            const updatedAt = typeof p.updatedAt === 'string' && p.updatedAt ? p.updatedAt : nowIso
+            db.prepare(
+              `UPDATE user_credentials
+               SET password_hash = ?, credential_version = ?, must_change_password = ?, failed_attempts = 0, locked_until = NULL, updated_at = ?
+               WHERE user_id = ?`,
+            ).run(nextHash, nextVersion, mustChange, updatedAt, targetUserId)
+            db.prepare('UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL').run(
+              nowIso,
+              targetUserId,
+            )
+            updatedUserIds.add(targetUserId)
+          }
+        }
       }
 
       db.prepare('INSERT INTO processed_cloud_events (event_id, cloud_seq, entity_type, processed_at) VALUES (?, ?, ?, ?)').run(
@@ -389,6 +466,7 @@ export function reconcileCloudEvents(
       conflictsCount,
       lastPulledSeq: maxSeq,
       updatedProductIds: [...updatedProductIds],
+      updatedUserIds: [...updatedUserIds],
     }
   } catch (err) {
     db.exec('ROLLBACK')

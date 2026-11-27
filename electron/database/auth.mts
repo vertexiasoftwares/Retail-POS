@@ -219,9 +219,57 @@ export class AuthRepository {
     for (const [key, rec] of this.sessions.entries()) {
       if (rec.userId === userId) this.sessions.delete(key)
     }
+    if (this.desktopSession?.userId === userId) {
+      this.desktopSession = null
+    }
     try {
       this.db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(this.now().toISOString(), userId)
     } catch {}
+  }
+
+  purgeMemorySessionsForUsers(userIds: string[]): void {
+    const targets = new Set(userIds)
+    for (const [key, rec] of this.sessions.entries()) {
+      if (targets.has(rec.userId)) this.sessions.delete(key)
+    }
+    if (this.desktopSession && targets.has(this.desktopSession.userId)) {
+      this.desktopSession = null
+    }
+  }
+
+  private enqueueUserCredentialSyncMarker(userId: string, timeIso: string): void {
+    const uRow = this.db.prepare(
+      `SELECT u.id, u.business_id, u.name, u.role, u.is_active, u.allowed_tabs, c.username,
+              COALESCE((SELECT ub.branch_id FROM user_branches ub WHERE ub.user_id = u.id LIMIT 1), 'branch-main') AS branch_id
+       FROM users u
+       LEFT JOIN user_credentials c ON c.user_id = u.id
+       WHERE u.id = ?`,
+    ).get(userId) as Row | undefined
+    if (!uRow) return
+    let allowedTabs: unknown = null
+    if (typeof uRow.allowed_tabs === 'string' && uRow.allowed_tabs) {
+      try { allowedTabs = JSON.parse(uRow.allowed_tabs) } catch {}
+    }
+    this.db.prepare("INSERT INTO entity_sync_state(entity_type,entity_id,sync_version) VALUES ('user',?,2) ON CONFLICT(entity_type,entity_id) DO UPDATE SET sync_version=sync_version+1").run(userId)
+    const verRow = this.db.prepare("SELECT sync_version FROM entity_sync_state WHERE entity_type='user' AND entity_id=?").get(userId) as Row | undefined
+    enqueueOutboxEvent(this.db, {
+      entityType: 'user',
+      entityId: userId,
+      operation: 'upsert',
+      counterId: 'counter-1',
+      occurredAt: timeIso,
+      payload: {
+        id: userId,
+        businessId: String(uRow.business_id),
+        branchId: String(uRow.branch_id),
+        name: String(uRow.name),
+        username: uRow.username ? String(uRow.username) : null,
+        role: String(uRow.role),
+        isActive: Number(uRow.is_active) === 1,
+        allowedTabs,
+        syncVersion: Number(verRow?.sync_version ?? 2),
+      },
+    })
   }
 
   status(token?: string): AuthStatus {
@@ -576,10 +624,12 @@ export class AuthRepository {
       const hash = await hashPassword(password(newPassword, true))
       this.unchangedSession(original, effectiveToken); this.require('users.manage', undefined, false, true, effectiveToken)
       this.transaction(() => {
+        const nowIso = this.now().toISOString()
         this.authorizeWrite('auth:reset-password')
-        this.db.prepare('UPDATE user_credentials SET password_hash=?,credential_version=credential_version+1,must_change_password=1,failed_attempts=0,locked_until=NULL,updated_at=? WHERE user_id=?').run(hash, this.now().toISOString(), userId)
+        this.db.prepare('UPDATE user_credentials SET password_hash=?,credential_version=credential_version+1,must_change_password=1,failed_attempts=0,locked_until=NULL,updated_at=? WHERE user_id=?').run(hash, nowIso, userId)
         this.revokeUserSessionsInDb(userId)
         this.audit(session.userId, session.branchId, 'Staff password reset', userId)
+        this.enqueueUserCredentialSyncMarker(userId, nowIso)
       })
     })
   }
@@ -600,8 +650,10 @@ export class AuthRepository {
       this.unchangedSession(original, token)
       this.require(undefined, undefined, true, true, token)
       this.transaction(() => {
-        this.db.prepare('UPDATE user_credentials SET password_hash=?,credential_version=credential_version+1,must_change_password=0,failed_attempts=0,locked_until=NULL,updated_at=? WHERE user_id=?').run(hash, this.now().toISOString(), session.userId)
+        const nowIso = this.now().toISOString()
+        this.db.prepare('UPDATE user_credentials SET password_hash=?,credential_version=credential_version+1,must_change_password=0,failed_attempts=0,locked_until=NULL,updated_at=? WHERE user_id=?').run(hash, nowIso, session.userId)
         this.audit(session.userId, session.branchId, 'Password changed', session.userId)
+        this.enqueueUserCredentialSyncMarker(session.userId, nowIso)
       })
       if (token) {
         const tokenHash = this.hashToken(token)

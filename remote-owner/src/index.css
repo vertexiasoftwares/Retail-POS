@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+:root {
+  --vtx-ink: #10243f;
+  --vtx-muted: #55667d;
+  --vtx-bg: #f2f7fd;
+  --vtx-surface: #ffffff;
+  --vtx-rail: #17082b;
+  --vtx-accent: #6d4aff;
+  --vtx-accent-hover: #5835eb;
+  --vtx-border: #dce6f4;
+  --font-display: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+  background-color: var(--vtx-bg);
+  color: var(--vtx-ink);
+  min-height: 100%;
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Smooth safe-area bottom spacing on Android Chrome PWA */
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}

@@ -15,7 +15,7 @@
 #if !FileExists(MyPackageDir + "\resources\app\node_modules\fastify\package.json")
   #error "Runtime dependencies are missing. Run npm run pack."
 #endif
-#if DirExists(MyPackageDir + "\resources\app\company") || DirExists(MyPackageDir + "\resources\app\data") || DirExists(MyPackageDir + "\resources\app\cloud-server") || DirExists(MyPackageDir + "\resources\app\cloud-dist") || FileExists(MyPackageDir + "\resources\app\.env")
+#if DirExists(MyPackageDir + "\resources\app\company") || DirExists(MyPackageDir + "\resources\app\data") || DirExists(MyPackageDir + "\resources\app\cloud-server") || DirExists(MyPackageDir + "\resources\app\cloud-dist") || DirExists(MyPackageDir + "\resources\app\remote-owner") || DirExists(MyPackageDir + "\resources\app\remote-dist") || FileExists(MyPackageDir + "\resources\app\.env")
   #error "Private, cloud-server, or database files detected in the package. Do not distribute this package."
 #endif
 
