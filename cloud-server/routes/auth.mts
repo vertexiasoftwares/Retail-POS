@@ -1,10 +1,9 @@
 import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import type { Pool } from 'pg'
 import { isUserRole, rolePermissions } from '../../src/shared/auth-policy.js'
 import type { Permission, UserRole } from '../../src/types/auth.js'
 import type { CloudEnvConfig } from '../config/env.mjs'
-import { normalizeShopUuid, type TenantDatabaseManager } from '../db/tenant-manager.mjs'
+import { CLOUD_COLLECTIONS, normalizeShopUuid, type MongoCloudStore } from '../db/mongo-store.mjs'
 
 const HASH_OPTIONS = { N: 131072, r: 8, p: 1, maxmem: 160 * 1024 * 1024 }
 const DUMMY_HASH = `scrypt-v1$${'00'.repeat(16)}$${'00'.repeat(64)}`
@@ -88,6 +87,7 @@ export interface CloudOwnerSession {
   userId: string
   shopUuid: string
   branchId: string
+  shopName?: string
   username: string
   name: string
   role: UserRole
@@ -103,7 +103,7 @@ export async function verifyNodeHmac(
   request: FastifyRequest,
   reply: FastifyReply,
   config: CloudEnvConfig,
-  centralPool: Pool,
+  store: MongoCloudStore,
   allowBootstrapSecret = false,
 ): Promise<{ shopUuid: string; nodeId: string } | null> {
   const shopHeader = String(request.headers['x-vertexia-shop-uuid'] || '')
@@ -138,11 +138,11 @@ export async function verifyNodeHmac(
         : ''
 
   if (!allowBootstrapSecret) {
-    const { rows } = await centralPool.query<{ status: string }>(
-      'SELECT status FROM vtx_central.installations WHERE node_id = $1 AND shop_uuid = $2',
-      [nodeHeader, shopUuid],
-    )
-    if (!rows.length || rows[0].status !== 'active') {
+    const inst = await store.col(CLOUD_COLLECTIONS.installations).findOne({
+      nodeId: nodeHeader,
+      shopUuid,
+    })
+    if (!inst || inst.status !== 'active') {
       reply.status(403).send({ error: 'NodeRevoked', message: 'Node registration is inactive or revoked.', statusCode: 403 })
       return null
     }
@@ -178,7 +178,7 @@ export function extractBearerToken(request: FastifyRequest): string | null {
 
 export async function authenticateCloudSession(
   token: string | null,
-  centralPool: Pool,
+  store: MongoCloudStore,
   requiredPermission?: Permission,
   requestedShopUuid?: string,
 ): Promise<{ session: CloudOwnerSession } | { statusCode: number; error: string; message: string }> {
@@ -186,38 +186,28 @@ export async function authenticateCloudSession(
     return { statusCode: 401, error: 'Unauthorized', message: 'Authentication required.' }
   }
   const tokenHash = sha256Hex(token)
-  const { rows } = await centralPool.query<{
-    user_id: string
-    shop_uuid: string
-    branch_id: string
-    username: string
-    name: string
-    role: string
-    is_active: boolean
-    user_cred_ver: number
-    sess_cred_ver: number
-    revoked_at: Date | null
-    expires_at: Date
-  }>(
-    `SELECT s.user_id, s.shop_uuid, u.branch_id, u.username, u.name, u.role,
-            u.is_active, u.credential_version AS user_cred_ver, s.credential_version AS sess_cred_ver,
-            s.revoked_at, s.expires_at
-     FROM vtx_central.central_sessions s
-     JOIN vtx_central.central_users u ON u.id = s.user_id AND u.shop_uuid = s.shop_uuid
-     WHERE s.token_hash = $1`,
-    [tokenHash],
-  )
-  if (!rows.length) {
+  const sess = await store.col(CLOUD_COLLECTIONS.cloudSessions).findOne({ tokenHash })
+  if (!sess) {
     return { statusCode: 401, error: 'Unauthorized', message: 'Cloud session expired or invalid.' }
   }
-  const row = rows[0]
-  if (row.revoked_at || new Date(row.expires_at).getTime() <= Date.now()) {
+  if (sess.revokedAt || new Date(sess.expiresAt as Date | string).getTime() <= Date.now()) {
     return { statusCode: 401, error: 'SessionExpired', message: 'Cloud session has expired.' }
   }
-  if (!row.is_active || Number(row.user_cred_ver) !== Number(row.sess_cred_ver) || !isUserRole(row.role)) {
+
+  const user = await store.col(CLOUD_COLLECTIONS.cloudUsers).findOne({
+    userId: String(sess.userId),
+    shopUuid: String(sess.shopUuid),
+  })
+  if (
+    !user ||
+    !user.isActive ||
+    Number(user.credentialVersion) !== Number(sess.credentialVersion) ||
+    !isUserRole(String(user.role))
+  ) {
     return { statusCode: 401, error: 'SessionInvalidated', message: 'Credentials changed or account disabled.' }
   }
 
+  const shopUuid = String(sess.shopUuid).toLowerCase()
   if (requestedShopUuid) {
     let normalizedTarget: string
     try {
@@ -225,28 +215,30 @@ export async function authenticateCloudSession(
     } catch {
       return { statusCode: 400, error: 'InvalidShopUuid', message: 'Invalid shop UUID.' }
     }
-    if (normalizedTarget !== row.shop_uuid.toLowerCase()) {
+    if (normalizedTarget !== shopUuid) {
       return { statusCode: 403, error: 'CrossTenantForbidden', message: 'Access denied to external shop tenant.' }
     }
   }
 
-  const permissions = [...rolePermissions[row.role]]
+  const permissions = [...rolePermissions[String(user.role) as UserRole]]
   if (requiredPermission && !permissions.includes(requiredPermission)) {
     return { statusCode: 403, error: 'Forbidden', message: 'Insufficient permission for this remote action.' }
   }
 
-  await centralPool.query('UPDATE vtx_central.central_sessions SET touched_at = NOW() WHERE token_hash = $1', [tokenHash])
+  await store.col(CLOUD_COLLECTIONS.cloudSessions).updateOne({ tokenHash }, { $set: { touchedAt: new Date() } })
+  const shopDoc = await store.col(CLOUD_COLLECTIONS.shops).findOne({ shopUuid })
 
   return {
     session: {
-      userId: row.user_id,
-      shopUuid: row.shop_uuid.toLowerCase(),
-      branchId: row.branch_id,
-      username: row.username,
-      name: row.name,
-      role: row.role,
+      userId: String(user.userId),
+      shopUuid,
+      branchId: String(user.branchId || 'branch-main'),
+      shopName: shopDoc ? String(shopDoc.name) : undefined,
+      username: String(user.username),
+      name: String(user.name),
+      role: String(user.role) as UserRole,
       permissions,
-      credentialVersion: Number(row.user_cred_ver),
+      credentialVersion: Number(user.credentialVersion),
     },
   }
 }
@@ -254,12 +246,12 @@ export async function authenticateCloudSession(
 export async function enforceCloudOwner(
   request: FastifyRequest,
   reply: FastifyReply,
-  centralPool: Pool,
+  store: MongoCloudStore,
   requiredPermission?: Permission,
   requestedShopUuid?: string,
 ): Promise<CloudOwnerSession | null> {
   const token = extractBearerToken(request)
-  const result = await authenticateCloudSession(token, centralPool, requiredPermission, requestedShopUuid)
+  const result = await authenticateCloudSession(token, store, requiredPermission, requestedShopUuid)
   if ('error' in result) {
     reply.status(result.statusCode).send({
       error: result.error,
@@ -271,19 +263,17 @@ export async function enforceCloudOwner(
   return result.session
 }
 
-export function registerCloudAuthRoutes(
-  app: FastifyInstance,
-  centralPool: Pool,
-  tenantManager?: TenantDatabaseManager,
-): void {
+export function registerCloudAuthRoutes(app: FastifyInstance, store: MongoCloudStore): void {
   // POST /api/cloud/auth/login
   app.post('/api/cloud/auth/login', async (request, reply) => {
-    const body = request.body as {
-      username?: string
-      password?: string
-      shopUuid?: string
-      deviceType?: string
-    } | undefined
+    const body = request.body as
+      | {
+          username?: string
+          password?: string
+          shopUuid?: string
+          deviceType?: string
+        }
+      | undefined
 
     if (!body?.username || !body?.password) {
       return reply.status(400).send({ error: 'BadRequest', message: 'Username and password are required.', statusCode: 400 })
@@ -301,35 +291,23 @@ export function registerCloudAuthRoutes(
       })
     }
 
-    const params: unknown[] = [login]
-    let sql = `SELECT u.*, b.name AS shop_name FROM vtx_central.central_users u JOIN vtx_central.businesses b ON b.shop_uuid = u.shop_uuid WHERE u.username = $1`
+    const filter: Record<string, unknown> = { username: login }
     if (body.shopUuid) {
       try {
-        const norm = normalizeShopUuid(body.shopUuid)
-        params.push(norm)
-        sql += ' AND u.shop_uuid = $2'
+        filter.shopUuid = normalizeShopUuid(body.shopUuid)
       } catch {
         return reply.status(400).send({ error: 'InvalidShopUuid', message: 'Invalid shop identifier.', statusCode: 400 })
       }
-    } else {
-      sql += ' ORDER BY u.updated_at DESC LIMIT 2'
     }
 
-    const { rows } = await centralPool.query<{
-      id: string
-      shop_uuid: string
-      branch_id: string
-      username: string
-      name: string
-      role: string
-      password_hash: string
-      credential_version: number
-      is_active: boolean
-      must_change_password: boolean
-      shop_name: string
-    }>(sql, params)
+    const users = await store
+      .col(CLOUD_COLLECTIONS.cloudUsers)
+      .find(filter)
+      .sort({ updatedAt: -1 })
+      .limit(2)
+      .toArray()
 
-    if (rows.length > 1 && !body.shopUuid) {
+    if (users.length > 1 && !body.shopUuid) {
       return reply.status(409).send({
         error: 'ShopSelectionRequired',
         message: 'Specify shopUuid to sign into this cloud account.',
@@ -337,24 +315,37 @@ export function registerCloudAuthRoutes(
       })
     }
 
-    const user = rows[0]
-    const ok = user ? await verifyScryptPassword(body.password, user.password_hash) : await verifyScryptPassword(body.password, DUMMY_HASH)
-    if (!ok || !user || !user.is_active || !isUserRole(user.role)) {
+    const user = users[0]
+    const ok = user
+      ? await verifyScryptPassword(body.password, String(user.passwordHash || ''))
+      : await verifyScryptPassword(body.password, DUMMY_HASH)
+    if (!ok || !user || !user.isActive || !isUserRole(String(user.role))) {
       recordAuthFailure(rateKey)
       return reply.status(401).send({ error: 'AuthError', message: 'Invalid username or password.', statusCode: 401 })
     }
     clearAuthFailures(rateKey)
 
+    const shopUuid = String(user.shopUuid).toLowerCase()
+    const shopDoc = await store.col(CLOUD_COLLECTIONS.shops).findOne({ shopUuid })
     const rawToken = randomBytes(32).toString('hex')
     const tokenHash = sha256Hex(rawToken)
-    const expiresAt = new Date(Date.now() + CLOUD_SESSION_TTL_MS)
+    const now = new Date()
+    const expiresAt = new Date(now.getTime() + CLOUD_SESSION_TTL_MS)
     const deviceType = (body.deviceType || 'owner_web').slice(0, 32)
 
-    await centralPool.query(
-      `INSERT INTO vtx_central.central_sessions (token_hash, user_id, shop_uuid, role, credential_version, device_type, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [tokenHash, user.id, user.shop_uuid, user.role, user.credential_version, deviceType, expiresAt],
-    )
+    await store.col(CLOUD_COLLECTIONS.cloudSessions).insertOne({
+      _id: tokenHash as any,
+      tokenHash,
+      userId: String(user.userId),
+      shopUuid,
+      role: String(user.role),
+      credentialVersion: Number(user.credentialVersion),
+      deviceType,
+      issuedAt: now,
+      touchedAt: now,
+      expiresAt,
+      revokedAt: null,
+    })
 
     const isSecure = request.headers['x-forwarded-proto'] === 'https' || request.protocol === 'https'
     reply.header(
@@ -366,22 +357,22 @@ export function registerCloudAuthRoutes(
       ok: true,
       token: rawToken,
       session: {
-        userId: user.id,
-        shopUuid: user.shop_uuid.toLowerCase(),
-        branchId: user.branch_id,
-        shopName: user.shop_name,
-        username: user.username,
-        name: user.name,
-        role: user.role,
-        permissions: [...rolePermissions[user.role]],
-        mustChangePassword: user.must_change_password,
+        userId: String(user.userId),
+        shopUuid,
+        branchId: String(user.branchId || 'branch-main'),
+        shopName: shopDoc ? String(shopDoc.name) : 'Vertexia Shop',
+        username: String(user.username),
+        name: String(user.name),
+        role: String(user.role),
+        permissions: [...rolePermissions[String(user.role) as UserRole]],
+        mustChangePassword: Boolean(user.mustChangePassword),
       },
     }
   })
 
   // GET /api/cloud/auth/me
   app.get('/api/cloud/auth/me', async (request, reply) => {
-    const session = await enforceCloudOwner(request, reply, centralPool)
+    const session = await enforceCloudOwner(request, reply, store)
     if (!session) return
     return { session }
   })
@@ -390,9 +381,9 @@ export function registerCloudAuthRoutes(
   app.post('/api/cloud/auth/logout', async (request, reply) => {
     const token = extractBearerToken(request)
     if (token) {
-      await centralPool.query('UPDATE vtx_central.central_sessions SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL', [
-        sha256Hex(token),
-      ])
+      await store
+        .col(CLOUD_COLLECTIONS.cloudSessions)
+        .updateOne({ tokenHash: sha256Hex(token), revokedAt: null }, { $set: { revokedAt: new Date() } })
     }
     reply.header('Set-Cookie', 'vertexia_cloud_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0')
     return { ok: true }
@@ -400,8 +391,9 @@ export function registerCloudAuthRoutes(
 
   // POST /api/cloud/auth/change-password
   app.post('/api/cloud/auth/change-password', async (request, reply) => {
-    const session = await enforceCloudOwner(request, reply, centralPool)
+    const session = await enforceCloudOwner(request, reply, store)
     if (!session) return
+
     const rateKey = `chpwd:${request.ip}:${session.userId}`
     const retryMs = getAuthThrottleRemainingMs(rateKey)
     if (retryMs > 0) {
@@ -417,11 +409,12 @@ export function registerCloudAuthRoutes(
     if (!body?.currentPassword || !body?.newPassword || body.newPassword.length < 8 || body.newPassword.length > 128) {
       return reply.status(400).send({ error: 'BadRequest', message: 'Use a new password of 8–128 characters.', statusCode: 400 })
     }
-    const { rows } = await centralPool.query<{ password_hash: string; credential_version: number }>(
-      'SELECT password_hash, credential_version FROM vtx_central.central_users WHERE id = $1 AND shop_uuid = $2',
-      [session.userId, session.shopUuid],
-    )
-    if (!rows.length || !(await verifyScryptPassword(body.currentPassword, rows[0].password_hash))) {
+
+    const userDoc = await store.col(CLOUD_COLLECTIONS.cloudUsers).findOne({
+      userId: session.userId,
+      shopUuid: session.shopUuid,
+    })
+    if (!userDoc || !(await verifyScryptPassword(body.currentPassword, String(userDoc.passwordHash || '')))) {
       recordAuthFailure(rateKey)
       return reply.status(400).send({ error: 'PasswordMismatch', message: 'Current password is incorrect.', statusCode: 400 })
     }
@@ -430,57 +423,48 @@ export function registerCloudAuthRoutes(
     const nextHash = await hashScryptPassword(body.newPassword)
     const token = extractBearerToken(request)
     const currentHash = token ? sha256Hex(token) : ''
-    const nowIso = new Date().toISOString()
+    const now = new Date()
+    const nowIso = now.toISOString()
 
-    const updatedRes = await centralPool.query<{ credential_version: number }>(
-      `UPDATE vtx_central.central_users
-       SET password_hash = $1, credential_version = credential_version + 1, must_change_password = FALSE, updated_at = NOW()
-       WHERE id = $2 AND shop_uuid = $3
-       RETURNING credential_version`,
-      [nextHash, session.userId, session.shopUuid],
+    const updated = await store.col(CLOUD_COLLECTIONS.cloudUsers).findOneAndUpdate(
+      { userId: session.userId, shopUuid: session.shopUuid },
+      {
+        $set: { passwordHash: nextHash, mustChangePassword: false, updatedAt: now },
+        $inc: { credentialVersion: 1 },
+      },
+      { returnDocument: 'after' },
     )
-    const nextCredentialVersion = Number(updatedRes.rows[0]?.credential_version ?? rows[0].credential_version + 1)
+    const nextCredentialVersion = Number((updated as any)?.credentialVersion ?? Number(userDoc.credentialVersion) + 1)
 
-    await centralPool.query(
-      `UPDATE vtx_central.central_sessions
-       SET revoked_at = NOW()
-       WHERE user_id = $1 AND shop_uuid = $2 AND token_hash <> $3 AND revoked_at IS NULL`,
-      [session.userId, session.shopUuid, currentHash],
+    await store.col(CLOUD_COLLECTIONS.cloudSessions).updateMany(
+      { userId: session.userId, shopUuid: session.shopUuid, tokenHash: { $ne: currentHash }, revokedAt: null },
+      { $set: { revokedAt: now } },
     )
     if (currentHash) {
-      await centralPool.query(
-        'UPDATE vtx_central.central_sessions SET credential_version = $2 WHERE token_hash = $1',
-        [currentHash, nextCredentialVersion],
-      )
+      await store
+        .col(CLOUD_COLLECTIONS.cloudSessions)
+        .updateOne({ tokenHash: currentHash }, { $set: { credentialVersion: nextCredentialVersion } })
     }
 
     let cloudSeq: number | null = null
-    if (tenantManager) {
-      const hasTenant = await tenantManager.resolveActiveSchema(session.shopUuid).then(() => true, () => false)
-      if (hasTenant) {
-        const evtRes = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-          const eventId = `cevt-${randomUUID()}`
-          const { rows: evtRows } = await client.query<{ cloud_seq: string }>(
-            `INSERT INTO cloud_sync_events (event_id, origin_source, counter_id, entity_type, entity_id, operation, payload_json)
-             VALUES ($1, 'cloud_owner', 'cloud', 'user_credential', $2, 'password_change', $3)
-             RETURNING cloud_seq`,
-            [
-              eventId,
-              session.userId,
-              JSON.stringify({
-                userId: session.userId,
-                shopUuid: session.shopUuid,
-                passwordHash: nextHash,
-                credentialVersion: nextCredentialVersion,
-                mustChangePassword: false,
-                updatedAt: nowIso,
-              }),
-            ],
-          )
-          return Number(evtRows[0].cloud_seq)
-        })
-        cloudSeq = evtRes
-      }
+    const hasShop = await store.ensureActiveShop(session.shopUuid).then(() => true, () => false)
+    if (hasShop) {
+      const evt = await store.appendCloudOwnerEvent({
+        shopUuid: session.shopUuid,
+        eventId: `cevt-${randomUUID()}`,
+        entityType: 'user_credential',
+        entityId: session.userId,
+        operation: 'password_change',
+        payload: {
+          userId: session.userId,
+          shopUuid: session.shopUuid,
+          passwordHash: nextHash,
+          credentialVersion: nextCredentialVersion,
+          mustChangePassword: false,
+          updatedAt: nowIso,
+        },
+      })
+      cloudSeq = evt.cloudSeq
     }
 
     return { ok: true, credentialVersion: nextCredentialVersion, cloudSeq }

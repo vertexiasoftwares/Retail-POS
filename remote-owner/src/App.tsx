@@ -83,9 +83,14 @@ export function App() {
     return () => window.removeEventListener('beforeinstallprompt', handler)
   }, [])
 
-  // Live WebSocket stream with automatic reconnect + polling fallback
+  // Prefer ordinary HTTPS polling for maximum compatibility with free serverless/spinning hosts;
+  // enable optional WebSocket channel only when VITE_CLOUD_REALTIME_WS=true
   useEffect(() => {
     if (!session) {
+      setWsState('polling')
+      return
+    }
+    if (import.meta.env.VITE_CLOUD_REALTIME_WS !== 'true') {
       setWsState('polling')
       return
     }
@@ -125,8 +130,12 @@ export function App() {
       ws.onclose = () => {
         if (disposed) return
         attempt += 1
+        if (attempt > 2) {
+          setWsState('polling')
+          return
+        }
         setWsState('reconnecting')
-        const delayMs = Math.min(30_000, 2_000 * attempt)
+        const delayMs = Math.min(15_000, 2_000 * attempt)
         reconnectTimerRef.current = window.setTimeout(connect, delayMs)
       }
       ws.onerror = () => {

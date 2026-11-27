@@ -1,45 +1,40 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
 import { randomUUID } from 'node:crypto'
+import { test } from 'node:test'
+import { createCloudServer } from '../cloud-dist/cloud-server/app.mjs'
 import { loadCloudEnv, loadDotEnv } from '../cloud-dist/cloud-server/config/env.mjs'
+import { CLOUD_COLLECTIONS, connectMongoCloudStore, normalizeShopUuid } from '../cloud-dist/cloud-server/db/mongo-store.mjs'
 import { signNodePayload } from '../cloud-dist/cloud-server/routes/auth.mjs'
-import { tenantDatabaseName, tenantSchemaName } from '../cloud-dist/cloud-server/db/tenant-manager.mjs'
+import { AuthRepository } from '../electron-dist/electron/database/auth.mjs'
+import { VertexiaDatabase } from '../electron-dist/electron/database/database.mjs'
+import { HybridSyncEngine } from '../electron-dist/electron/sync/engine.mjs'
+import { createInMemoryMongoCloudStore } from './helpers/in-memory-mongo.mjs'
 
 loadDotEnv()
 
-test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supabase PostgreSQL remote owner flow', async (t) => {
-  await t.test('rejects insecure production configuration without secrets or DB URLs', () => {
+test('Phase 6: Cloud environment, HMAC signing, MongoDB tenant partitioning & offline owner sync flow', async t => {
+  await t.test('rejects insecure production configuration without secrets or MONGODB_URI', () => {
     assert.throws(
       () =>
         loadCloudEnv({
           NODE_ENV: 'production',
-          DATABASE_CENTRAL_URL: '',
+          MONGODB_URI: '',
           CLOUD_JWT_SECRET: 'short',
           CLOUD_NODE_HMAC_SECRET: 'short',
         }),
-      /DATABASE_CENTRAL_URL \(or DATABASE_URL\) is required/,
+      /MONGODB_URI is required/,
     )
-    const cfg = loadCloudEnv({
+    const prodCfg = loadCloudEnv({
       NODE_ENV: 'production',
-      DATABASE_CENTRAL_URL: 'postgres://postgres:secret@127.0.0.1:5432/postgres',
-      CLOUD_JWT_SECRET: 'prod-jwt-secret-value-at-least-32-characters-long',
-      CLOUD_NODE_HMAC_SECRET: 'prod-hmac-secret-value-at-least-32-characters-long',
-    })
-    assert.equal(cfg.host, '0.0.0.0')
-    assert.equal(cfg.port, 8090)
-    assert.equal(cfg.sslMode, 'disable')
-
-    const railwayCfg = loadCloudEnv({
-      NODE_ENV: 'production',
-      RAILWAY_ENVIRONMENT: 'production',
       PORT: '41234',
       CLOUD_PORT: '8090',
-      DATABASE_CENTRAL_URL: 'postgres://postgres:secret@db.example.com:5432/postgres',
+      MONGODB_URI: 'mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority',
       CLOUD_JWT_SECRET: 'prod-jwt-secret-value-at-least-32-characters-long',
       CLOUD_NODE_HMAC_SECRET: 'prod-hmac-secret-value-at-least-32-characters-long',
     })
-    assert.equal(railwayCfg.host, '0.0.0.0')
-    assert.equal(railwayCfg.port, 41234)
+    assert.equal(prodCfg.host, '0.0.0.0')
+    assert.equal(prodCfg.port, 41234)
+    assert.equal(prodCfg.mongoDbName, 'vertexia_cloud')
 
     const localCfg = loadCloudEnv({
       NODE_ENV: 'development',
@@ -51,41 +46,41 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
     assert.equal(localCfg.port, 8095)
   })
 
-  await t.test('generates deterministic HMAC-SHA256 node signatures and deterministic immutable tenant schema names', () => {
-    const shopUuid = randomUUID()
+  await t.test('generates deterministic HMAC-SHA256 node signatures and validates canonical shopUuid keys', () => {
+    const shopUuid = randomUUID().toUpperCase()
+    const normalized = normalizeShopUuid(shopUuid)
+    assert.equal(normalized, shopUuid.toLowerCase())
+    assert.throws(() => normalizeShopUuid('not-a-uuid'), /Invalid shop UUID/)
+
     const ts = String(Date.now())
     const body = JSON.stringify({ events: [{ id: 1 }] })
-    const sig1 = signNodePayload('my-secret-32-char-minimum-hmac-key', shopUuid, ts, body)
-    const sig2 = signNodePayload('my-secret-32-char-minimum-hmac-key', shopUuid, ts, body)
+    const sig1 = signNodePayload('my-secret-32-char-minimum-hmac-key', normalized, ts, body)
+    const sig2 = signNodePayload('my-secret-32-char-minimum-hmac-key', normalized, ts, body)
     assert.equal(sig1, sig2)
     assert.match(sig1, /^[a-f0-9]{64}$/)
-    assert.match(tenantDatabaseName(shopUuid), /^vtx_shop_[0-9a-f]{32}$/)
-    assert.equal(tenantDatabaseName(shopUuid), tenantSchemaName(shopUuid))
   })
 
-  const centralUrl = process.env.TEST_DATABASE_CENTRAL_URL || process.env.DATABASE_CENTRAL_URL
-
-  if (!centralUrl) {
-    console.log('[SKIP LIVE PG] Set TEST_DATABASE_CENTRAL_URL or DATABASE_CENTRAL_URL to run live PostgreSQL gateway & multi-tenant tests.')
-    return
-  }
-
-  await t.test('live Supabase PostgreSQL: provisions isolated tenant schemas, syncs Main PC data, serves Owner while Main PC OFF, enforces 403 cross-tenant & 409 hardware error', async (subT) => {
-    const { createCloudServer } = await import('../cloud-dist/cloud-server/app.mjs')
-    const { VertexiaDatabase } = await import('../electron-dist/electron/database/database.mjs')
-    const { AuthRepository } = await import('../electron-dist/electron/database/auth.mjs')
-    const { HybridSyncEngine } = await import('../electron-dist/electron/sync/engine.mjs')
-
+  await t.test('syncs Main PC data to MongoDB store, serves Owner while Main PC OFF, enforces 403 cross-tenant, tombstones & 409 hardware error', async subT => {
+    const liveUri = process.env.TEST_MONGODB_URI
+    const testDbName = liveUri ? 'vertexia_cloud_test' : 'vertexia_cloud'
     const config = loadCloudEnv({
       NODE_ENV: 'test',
       CLOUD_HOST: '127.0.0.1',
       CLOUD_PORT: '0',
-      DATABASE_CENTRAL_URL: centralUrl,
+      MONGODB_URI: liveUri || 'mongodb://127.0.0.1:27017',
+      MONGODB_DB_NAME: testDbName,
       CLOUD_JWT_SECRET: 'test-jwt-secret-key-at-least-32-characters-1234',
       CLOUD_NODE_HMAC_SECRET: 'test-hmac-secret-key-at-least-32-characters-1234',
     })
 
-    const cloud = await createCloudServer({ config, logger: false })
+    if (liveUri) {
+      console.log(`[LIVE ATLAS] Phase 6 using dedicated test database: ${testDbName}`)
+    }
+    const store = liveUri
+      ? await connectMongoCloudStore(config)
+      : await createInMemoryMongoCloudStore()
+
+    const cloud = await createCloudServer({ config, store, logger: false })
     await cloud.start()
 
     const port = cloud.app.server.address().port
@@ -96,28 +91,28 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
     const secondShopUuid = randomUUID()
 
     subT.after(async () => {
-      try {
-        await cloud.tenantManager.dropTenantSchemaForTest(db.shopUuid)
-      } catch {}
-      try {
-        await cloud.tenantManager.dropTenantSchemaForTest(secondShopUuid)
-      } catch {}
       db.close()
       await cloud.stop()
+      if (liveUri) {
+        try {
+          await store.db.dropDatabase()
+        } catch {}
+        await store.close()
+      }
     })
 
     const ownerSession = await auth.setup({
-      businessName: 'PG Live Shop',
+      businessName: 'Mongo Live Shop',
       branchName: 'Main',
       city: 'Lahore',
-      ownerName: 'Live Owner',
-      username: `pgowner_${Date.now()}`,
+      ownerName: 'Mongo Owner',
+      username: `mgowner_${Date.now()}`,
       password: 'Password!2026',
     })
     const prod = db.saveProduct(ownerSession.branchId, {
-      name: 'PG Tea 1kg',
-      sku: 'PG-TEA-1',
-      barcode: 'PG-TEA-1',
+      name: 'Mongo Tea 1kg',
+      sku: 'MG-TEA-1',
+      barcode: 'MG-TEA-1',
       category: 'Grocery',
       subcategory: '',
       brand: 'Tapal',
@@ -130,9 +125,9 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
       status: 'active',
       imageDataUrl: null,
     })
-    db.openPosShift(ownerSession.branchId, 50000, 'pg-shift-1')
+    db.openPosShift(ownerSession.branchId, 50000, 'mg-shift-1')
     db.completePosSale({
-      operationId: 'pg-sale-1',
+      operationId: 'mg-sale-1',
       branchId: ownerSession.branchId,
       customerId: 'customer-walk-in',
       lines: [{ productId: prod.id, quantityMilli: 3000, discountBasisPoints: 0 }],
@@ -148,7 +143,7 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
     const pushRes = await syncEngine.triggerNow()
     assert.equal(pushRes.synced, true)
 
-    // Turn Main PC "OFF" (no requests hit Main PC below!) and verify Owner logs into Cloud directly
+    // Turn Main PC "OFF" and verify Owner logs into Cloud directly
     const cloudLoginRes = await fetch(`${cloudBase}/api/cloud/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -167,11 +162,13 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
     const dashJson = await dashRes.json()
     assert.equal(dashJson.summary.netSalesPaisa, 300000)
 
-    // Cross-tenant rejection check
-    const foreignRes = await fetch(`${cloudBase}/api/cloud/owner/dashboard?shopUuid=${randomUUID()}`, {
+    // Cross-tenant isolation check
+    const foreignRes = await fetch(`${cloudBase}/api/cloud/owner/dashboard?shopUuid=${secondShopUuid}`, {
       headers: { authorization: bearer },
     })
     assert.equal(foreignRes.status, 403)
+    const foreignProducts = await store.col(CLOUD_COLLECTIONS.products).countDocuments({ shopUuid: secondShopUuid })
+    assert.equal(foreignProducts, 0)
 
     // Remote hardware rejection check
     const drawerRes = await fetch(`${cloudBase}/api/cloud/owner/open-cash-drawer`, {
@@ -182,7 +179,7 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
     assert.equal(drawerRes.status, 409)
     assert.equal((await drawerRes.json()).error, 'MAIN_PC_HARDWARE_REQUIRED')
 
-    // Remote inventory increase while Main PC offline, then Main PC comes back & reconciles!
+    // Remote inventory increase while Main PC offline, then Main PC reconciles
     const adjRes = await fetch(`${cloudBase}/api/cloud/owner/inventory/adjust`, {
       method: 'POST',
       headers: { authorization: bearer, 'content-type': 'application/json' },
@@ -197,27 +194,9 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
     const localQty = Number(
       db.connection.prepare('SELECT quantity_milli FROM stock_levels WHERE branch_id=? AND product_id=?').get(ownerSession.branchId, prod.id).quantity_milli,
     )
-    assert.equal(localQty, 22_000) // 20 - 3 + 5 = 22
+    assert.equal(localQty, 22_000)
 
-    // Verify second isolated tenant schema + privilege revocation + cloud backup verification
-    await cloud.centralPool.query(
-      `INSERT INTO vtx_central.businesses (shop_uuid, local_business_id, name, branch_name, city, status)
-       VALUES ($1, 'biz-2', 'Second Isolated Shop', 'Main', 'Karachi', 'active')`,
-      [secondShopUuid],
-    )
-    const secondSchema = await cloud.tenantManager.ensureTenantSchema(secondShopUuid)
-    assert.equal(secondSchema, tenantSchemaName(secondShopUuid))
-    const privRes = await cloud.centralPool.query(
-      `SELECT has_schema_privilege('anon', 'vtx_central', 'USAGE') AS anon_central,
-              has_schema_privilege('anon', $1, 'USAGE') AS anon_tenant`,
-      [secondSchema],
-    )
-    assert.equal(privRes.rows[0].anon_central, false)
-    assert.equal(privRes.rows[0].anon_tenant, false)
-
-    const secondProducts = await cloud.tenantManager.queryTenant(secondShopUuid, 'SELECT COUNT(*)::int AS cnt FROM products')
-    assert.equal(secondProducts.rows[0].cnt, 0) // Zero cross-tenant bleed from Shop 1
-
+    // Cloud backup create & SHA-256 verify inside MongoDB
     const backupCreateRes = await fetch(`${cloudBase}/api/cloud/owner/backups/create`, {
       method: 'POST',
       headers: { authorization: bearer, 'content-type': 'application/json' },

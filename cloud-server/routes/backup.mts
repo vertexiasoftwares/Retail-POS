@@ -1,122 +1,102 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import type { Pool } from 'pg'
-import type { CloudEnvConfig } from '../config/env.mjs'
-import type { TenantDatabaseManager } from '../db/tenant-manager.mjs'
+import { CLOUD_COLLECTIONS, type MongoCloudStore } from '../db/mongo-store.mjs'
 import { enforceCloudOwner } from './auth.mjs'
 
 const BACKUP_FILE_RE = /^[a-zA-Z0-9._-]+\.json$/
 
-function resolveSafeShopBackupFile(backupDir: string, shopUuid: string, fileName: string): { fileName: string; filePath: string } | null {
-  if (!BACKUP_FILE_RE.test(fileName) || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
-    return null
-  }
-  const shopDir = resolve(backupDir, shopUuid)
-  const filePath = resolve(shopDir, fileName)
-  if (!filePath.startsWith(shopDir + sep)) {
-    return null
-  }
-  return { fileName, filePath }
-}
-
-const BACKUP_TABLES = [
+const BACKUP_COLLECTION_KEYS = [
   'branches',
-  'users',
+  'cloudUsers',
   'counters',
   'products',
-  'stock_levels',
-  'stock_movements',
+  'stockLevels',
+  'stockMovements',
   'customers',
   'suppliers',
   'sales',
-  'sale_items',
-  'sale_payments',
-  'sale_returns',
-  'manual_returns',
+  'saleReturns',
+  'manualReturns',
   'purchases',
-  'customer_receipts',
-  'supplier_payments',
-  'customer_ledger',
-  'supplier_ledger',
+  'customerReceipts',
+  'supplierPayments',
+  'customerLedger',
+  'supplierLedger',
   'expenses',
-  'cash_shifts',
-  'cash_movements',
-  'sync_conflicts',
+  'cashShifts',
+  'cashMovements',
+  'syncConflicts',
+  'entityTombstones',
 ] as const
 
-export function registerCloudBackupRoutes(
-  app: FastifyInstance,
-  config: CloudEnvConfig,
-  centralPool: Pool,
-  tenantManager: TenantDatabaseManager,
-): void {
+export function registerCloudBackupRoutes(app: FastifyInstance, store: MongoCloudStore): void {
   // POST /api/cloud/owner/backups/create
   app.post('/api/cloud/owner/backups/create', async (request, reply) => {
     const body = (request.body as { shopUuid?: string }) || {}
-    const session = await enforceCloudOwner(request, reply, centralPool, 'backup.manage', body.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'backup.manage', body.shopUuid)
     if (!session) return
 
-    const snapshot: Record<string, unknown> = {
-      format: 'vertexia-cloud-tenant-backup-v1',
-      shopUuid: session.shopUuid,
-      createdAt: new Date().toISOString(),
-      tables: {} as Record<string, unknown[]>,
+    const createdAt = new Date().toISOString()
+    const tables: Record<string, unknown[]> = {}
+
+    for (const key of BACKUP_COLLECTION_KEYS) {
+      const colName = CLOUD_COLLECTIONS[key]
+      const docs = await store.col(colName).find({ shopUuid: session.shopUuid }).toArray()
+      tables[colName] = docs
     }
 
-    await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      for (const table of BACKUP_TABLES) {
-        const { rows } = await client.query(`SELECT * FROM ${table}`)
-        ;(snapshot.tables as Record<string, unknown[]>)[table] = rows
-      }
-    })
+    const snapshot = {
+      format: 'vertexia-cloud-mongo-backup-v1',
+      shopUuid: session.shopUuid,
+      createdAt,
+      tables,
+    }
 
     const serialized = JSON.stringify(snapshot)
     const checksum = createHash('sha256').update(serialized).digest('hex')
-    const shopDir = join(config.backupDir, session.shopUuid)
-    mkdirSync(shopDir, { recursive: true })
     const fileName = `cloud-backup-${session.shopUuid}-${Date.now()}.json`
-    const filePath = join(shopDir, fileName)
-    writeFileSync(filePath, serialized, 'utf8')
-    writeFileSync(`${filePath}.sha256`, checksum, 'utf8')
+    const sizeBytes = Buffer.byteLength(serialized, 'utf8')
+
+    await store.col(CLOUD_COLLECTIONS.cloudBackups).insertOne({
+      _id: `${session.shopUuid}:${fileName}` as any,
+      fileName,
+      shopUuid: session.shopUuid,
+      format: snapshot.format,
+      sizeBytes,
+      checksum,
+      createdAt,
+      snapshotJson: serialized,
+    })
 
     return {
       ok: true,
       fileName,
       checksum,
-      sizeBytes: Buffer.byteLength(serialized, 'utf8'),
-      createdAt: snapshot.createdAt,
+      sizeBytes,
+      createdAt,
     }
   })
 
   // GET /api/cloud/owner/backups
   app.get('/api/cloud/owner/backups', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'backup.manage', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'backup.manage', q.shopUuid)
     if (!session) return
 
-    const shopDir = join(config.backupDir, session.shopUuid)
-    try {
-      const files = readdirSync(shopDir).filter(f => f.endsWith('.json'))
-      const records = files.map(fileName => {
-        const full = join(shopDir, fileName)
-        const st = statSync(full)
-        let checksum = ''
-        try {
-          checksum = readFileSync(`${full}.sha256`, 'utf8').trim()
-        } catch {}
-        return {
-          fileName,
-          sizeBytes: st.size,
-          checksum,
-          createdAt: st.mtime.toISOString(),
-        }
-      })
-      records.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      return { records }
-    } catch {
-      return { records: [] }
+    const docs = await store
+      .col(CLOUD_COLLECTIONS.cloudBackups)
+      .find({ shopUuid: session.shopUuid }, { projection: { snapshotJson: 0 } })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .toArray()
+
+    return {
+      records: docs.map(d => ({
+        fileName: String(d.fileName),
+        sizeBytes: Number(d.sizeBytes ?? 0),
+        checksum: String(d.checksum || ''),
+        createdAt: String(d.createdAt || ''),
+      })),
     }
   })
 
@@ -124,58 +104,69 @@ export function registerCloudBackupRoutes(
   app.get('/api/cloud/owner/backups/:file/verify', async (request, reply) => {
     const params = request.params as { file: string }
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'backup.manage', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'backup.manage', q.shopUuid)
     if (!session) return
 
-    const safe = resolveSafeShopBackupFile(config.backupDir, session.shopUuid, params.file)
-    if (!safe) {
+    if (!BACKUP_FILE_RE.test(params.file) || params.file.includes('..') || params.file.includes('/') || params.file.includes('\\')) {
       return reply.status(400).send({ error: 'InvalidFilename', message: 'Invalid backup filename.', statusCode: 400 })
     }
-    try {
-      const raw = readFileSync(safe.filePath, 'utf8')
-      const actual = createHash('sha256').update(raw).digest('hex')
-      const expected = readFileSync(`${safe.filePath}.sha256`, 'utf8').trim()
-      const parsed = JSON.parse(raw) as { shopUuid?: string; format?: string }
-      const valid = actual === expected && parsed.shopUuid === session.shopUuid && parsed.format === 'vertexia-cloud-tenant-backup-v1'
-      return { valid, checksum: actual, expectedChecksum: expected }
-    } catch (err: any) {
-      return reply.status(404).send({ error: 'BackupNotFound', message: err?.message || 'Backup file missing.', statusCode: 404 })
+
+    const doc = await store.col(CLOUD_COLLECTIONS.cloudBackups).findOne({
+      shopUuid: session.shopUuid,
+      fileName: params.file,
+    })
+    if (!doc || typeof doc.snapshotJson !== 'string') {
+      return reply.status(404).send({ error: 'BackupNotFound', message: 'Backup file missing.', statusCode: 404 })
     }
+
+    const actual = createHash('sha256').update(doc.snapshotJson).digest('hex')
+    const expected = String(doc.checksum || '')
+    let valid = false
+    try {
+      const parsed = JSON.parse(doc.snapshotJson) as { shopUuid?: string; format?: string }
+      valid = actual === expected && parsed.shopUuid === session.shopUuid && parsed.format === 'vertexia-cloud-mongo-backup-v1'
+    } catch {
+      valid = false
+    }
+    return { valid, checksum: actual, expectedChecksum: expected }
   })
 
   // GET /api/cloud/owner/backups/:file/download
   app.get('/api/cloud/owner/backups/:file/download', async (request, reply) => {
     const params = request.params as { file: string }
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'backup.manage', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'backup.manage', q.shopUuid)
     if (!session) return
 
-    const safe = resolveSafeShopBackupFile(config.backupDir, session.shopUuid, params.file)
-    if (!safe) {
+    if (!BACKUP_FILE_RE.test(params.file) || params.file.includes('..') || params.file.includes('/') || params.file.includes('\\')) {
       return reply.status(400).send({ error: 'InvalidFilename', message: 'Invalid backup filename.', statusCode: 400 })
     }
 
-    try {
-      const raw = readFileSync(safe.filePath, 'utf8')
-      const actual = createHash('sha256').update(raw).digest('hex')
-      const expected = readFileSync(`${safe.filePath}.sha256`, 'utf8').trim()
-      const parsed = JSON.parse(raw) as { shopUuid?: string; format?: string }
-      if (parsed.shopUuid !== session.shopUuid || parsed.format !== 'vertexia-cloud-tenant-backup-v1' || actual !== expected) {
-        return reply.status(409).send({
-          error: 'BackupIntegrityError',
-          message: 'Cloud backup checksum or tenant ownership check failed.',
-          statusCode: 409,
-        })
-      }
-
-      return reply
-        .header('Content-Type', 'application/json; charset=utf-8')
-        .header('Content-Disposition', `attachment; filename="${safe.fileName}"`)
-        .header('X-Content-Type-Options', 'nosniff')
-        .header('X-Backup-Checksum-Sha256', actual)
-        .send(raw)
-    } catch (err: any) {
-      return reply.status(404).send({ error: 'BackupNotFound', message: err?.message || 'Backup file missing.', statusCode: 404 })
+    const doc = await store.col(CLOUD_COLLECTIONS.cloudBackups).findOne({
+      shopUuid: session.shopUuid,
+      fileName: params.file,
+    })
+    if (!doc || typeof doc.snapshotJson !== 'string') {
+      return reply.status(404).send({ error: 'BackupNotFound', message: 'Backup file missing.', statusCode: 404 })
     }
+
+    const raw = doc.snapshotJson
+    const actual = createHash('sha256').update(raw).digest('hex')
+    const expected = String(doc.checksum || '')
+    const parsed = JSON.parse(raw) as { shopUuid?: string; format?: string }
+    if (parsed.shopUuid !== session.shopUuid || parsed.format !== 'vertexia-cloud-mongo-backup-v1' || actual !== expected) {
+      return reply.status(409).send({
+        error: 'BackupIntegrityError',
+        message: 'Cloud backup checksum or tenant ownership check failed.',
+        statusCode: 409,
+      })
+    }
+
+    return reply
+      .header('Content-Type', 'application/json; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${String(doc.fileName)}"`)
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('X-Backup-Checksum-Sha256', actual)
+      .send(raw)
   })
 }

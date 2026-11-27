@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
-import type { Pool } from 'pg'
+import type { MongoCloudStore } from './db/mongo-store.mjs'
 import { authenticateCloudSession } from './routes/auth.mjs'
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
@@ -25,7 +25,7 @@ export class CloudRealtimeBroker {
   private readonly clients = new Set<CloudClient>()
   private readonly timer: NodeJS.Timeout
 
-  constructor(private readonly centralPool: Pool) {
+  constructor(private readonly store: MongoCloudStore) {
     this.timer = setInterval(() => {
       const now = Date.now()
       for (const client of this.clients) {
@@ -68,7 +68,7 @@ export class CloudRealtimeBroker {
       }
     }
 
-    const authResult = await authenticateCloudSession(token, this.centralPool)
+    const authResult = await authenticateCloudSession(token, this.store)
     if ('error' in authResult) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
       socket.destroy()

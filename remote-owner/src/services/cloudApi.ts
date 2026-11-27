@@ -362,7 +362,7 @@ export function setUnauthorizedHandler(fn: (() => void) | null): void {
 function resolveApiUrl(path: string, overrideBase?: string): string {
   const base = (overrideBase ?? getSavedCloudUrl()).replace(/\/+$/, '')
   if (!base) {
-    throw new CloudApiError('Set your Railway Cloud Gateway URL first.', 0, 'MissingGatewayUrl')
+    throw new CloudApiError('Set your Vertexia Cloud API URL first.', 0, 'MissingGatewayUrl')
   }
   return `${base}${path}`
 }
@@ -386,7 +386,7 @@ async function requestJson<T>(
   try {
     res = await fetch(url, { ...init, headers })
   } catch {
-    throw new CloudApiError('Cannot reach Railway Cloud Gateway. Check your internet connection or Gateway URL.', 0, 'NetworkError')
+    throw new CloudApiError('Cannot reach Vertexia Cloud API. Check your internet connection or Cloud API URL.', 0, 'NetworkError')
   }
 
   let body: Record<string, unknown> = {}

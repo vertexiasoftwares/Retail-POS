@@ -1,212 +1,158 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import type { Pool, PoolClient } from 'pg'
-import type { TenantDatabaseManager } from '../db/tenant-manager.mjs'
+import { CLOUD_COLLECTIONS, type MongoCloudStore } from '../db/mongo-store.mjs'
 import type { CloudRealtimeBroker } from '../realtime.mjs'
 import { enforceCloudOwner } from './auth.mjs'
 
-async function appendCloudOwnerEvent(
-  client: PoolClient,
-  params: {
-    entityType: string
-    entityId: string
-    operation: string
-    payload: Record<string, unknown>
-  },
-): Promise<{ eventId: string; cloudSeq: number }> {
-  const eventId = `cevt-${randomUUID()}`
-  const { rows } = await client.query<{ cloud_seq: string }>(
-    `INSERT INTO cloud_sync_events (event_id, origin_source, counter_id, entity_type, entity_id, operation, payload_json)
-     VALUES ($1, 'cloud_owner', 'cloud', $2, $3, $4, $5)
-     RETURNING cloud_seq`,
-    [eventId, params.entityType, params.entityId, params.operation, JSON.stringify(params.payload)],
-  )
-  return { eventId, cloudSeq: Number(rows[0].cloud_seq) }
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export function registerRemoteOwnerRoutes(
   app: FastifyInstance,
-  centralPool: Pool,
-  tenantManager: TenantDatabaseManager,
+  store: MongoCloudStore,
   realtime?: CloudRealtimeBroker,
 ): void {
   // GET /api/cloud/owner/dashboard — Works completely offline from Main PC
   app.get('/api/cloud/owner/dashboard', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'dashboard.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'dashboard.read', q.shopUuid)
     if (!session) return
 
     const todayBusinessDate = new Date(Date.now() + 5 * 3600_000).toISOString().slice(0, 10)
+    const shopUuid = session.shopUuid
 
-    const bizRes = await centralPool.query<{ name: string; branch_name: string; city: string }>(
-      'SELECT name, branch_name, city FROM vtx_central.businesses WHERE shop_uuid = $1',
-      [session.shopUuid],
-    )
-    const nodeRes = await centralPool.query<{ last_sync_at: Date | null }>(
-      'SELECT MAX(last_sync_at) AS last_sync_at FROM vtx_central.installations WHERE shop_uuid = $1 AND status = $2',
-      [session.shopUuid, 'active'],
-    )
-    const {
-      summaryRes,
-      todaySalesRes,
-      returnsRes,
-      lowStockRes,
-      lowStockItemsRes,
-      byCounterRes,
-      recentSalesRes,
-      expensesSummaryRes,
-      recentExpensesRes,
-      openShiftsRes,
-      remoteEventsRes,
-    } = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const sRes = await client.query<{
-        sales_paisa: string
-        profit_paisa: string
-        tx_count: string
-      }>(
-        `SELECT COALESCE(SUM(total_paisa), 0) AS sales_paisa,
-                COALESCE(SUM(total_paisa - cost_paisa), 0) AS profit_paisa,
-                COUNT(*) AS tx_count
-         FROM sales WHERE status <> 'voided'`,
-      )
-      const tSalesRes = await client.query<{
-        sales_paisa: string
-        profit_paisa: string
-        tx_count: string
-      }>(
-        `SELECT COALESCE(SUM(total_paisa), 0) AS sales_paisa,
-                COALESCE(SUM(total_paisa - cost_paisa), 0) AS profit_paisa,
-                COUNT(*) AS tx_count
-         FROM sales WHERE status <> 'voided' AND business_date = $1`,
-        [todayBusinessDate],
-      )
-      const rRes = await client.query<{ total_returns_paisa: string }>(
-        `SELECT COALESCE((SELECT SUM(total_paisa) FROM sale_returns), 0) + COALESCE((SELECT SUM(total_paisa) FROM manual_returns), 0) AS total_returns_paisa`,
-      )
-      const lRes = await client.query<{ cnt: string }>(
-        `SELECT COUNT(*) AS cnt FROM products p JOIN stock_levels sl ON sl.product_id = p.id WHERE p.is_active = TRUE AND sl.quantity_milli <= p.low_stock_milli`,
-      )
-      const liRes = await client.query<{
-        id: string
-        sku: string
-        name: string
-        unit: string
-        quantity_milli: string
-        low_stock_milli: string
-      }>(
-        `SELECT p.id, p.sku, p.name, p.unit, sl.quantity_milli, p.low_stock_milli
-         FROM products p
-         JOIN stock_levels sl ON sl.product_id = p.id AND sl.branch_id = $1
-         WHERE p.is_active = TRUE AND sl.quantity_milli <= p.low_stock_milli
-         ORDER BY sl.quantity_milli ASC LIMIT 8`,
-        [session.branchId],
-      )
-      const bcRes = await client.query(
-        `SELECT c.id AS counter_id, c.counter_number, c.name, c.status, c.last_seen_at,
-                COUNT(s.id)::INTEGER AS invoice_count,
-                COALESCE(SUM(CASE WHEN s.status <> 'voided' THEN s.total_paisa ELSE 0 END), 0) AS sales_paisa
-         FROM counters c
-         LEFT JOIN sales s ON s.counter_id = c.id
-         GROUP BY c.id, c.counter_number, c.name, c.status, c.last_seen_at
-         ORDER BY c.counter_number ASC`,
-      )
-      const rsRes = await client.query(
-        `SELECT s.id, s.invoice_number, s.counter_id, s.total_paisa, s.status, s.completed_at, c.name AS customer_name
-         FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
-         ORDER BY s.completed_at DESC LIMIT 10`,
-      )
-      const expRes = await client.query<{ total_paisa: string; today_paisa: string }>(
-        `SELECT COALESCE(SUM(amount_paisa), 0) AS total_paisa,
-                COALESCE(SUM(CASE WHEN business_date = $1 THEN amount_paisa ELSE 0 END), 0) AS today_paisa
-         FROM expenses`,
-        [todayBusinessDate],
-      )
-      const recExpRes = await client.query(
-        `SELECT id, expense_number, business_date, category, description, method, amount_paisa, occurred_at
-         FROM expenses ORDER BY occurred_at DESC LIMIT 5`,
-      )
-      const osRes = await client.query<{ open_count: string }>(
-        `SELECT COUNT(*) AS open_count FROM cash_shifts WHERE status = 'open'`,
-      )
-      const revRes = await client.query<{ total_remote: string }>(
-        `SELECT COUNT(*) AS total_remote FROM cloud_sync_events WHERE origin_source = 'cloud_owner'`,
-      )
+    const [
+      shopDoc,
+      activeInstallations,
+      salesDocs,
+      saleReturnsDocs,
+      manualReturnsDocs,
+      productDocs,
+      stockDocs,
+      counterDocs,
+      customerDocs,
+      expenseDocs,
+      openShiftsCount,
+      remoteOwnerEventsCount,
+    ] = await Promise.all([
+      store.col(CLOUD_COLLECTIONS.shops).findOne({ shopUuid }),
+      store.col(CLOUD_COLLECTIONS.installations).find({ shopUuid, status: 'active' }).toArray(),
+      store.col(CLOUD_COLLECTIONS.sales).find({ shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.saleReturns).find({ shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.manualReturns).find({ shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.products).find({ shopUuid, isDeleted: { $ne: true } }).toArray(),
+      store.col(CLOUD_COLLECTIONS.stockLevels).find({ shopUuid, branchId: session.branchId }).toArray(),
+      store.col(CLOUD_COLLECTIONS.counters).find({ shopUuid }).sort({ counterNumber: 1 }).toArray(),
+      store.col(CLOUD_COLLECTIONS.customers).find({ shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.expenses).find({ shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.cashShifts).countDocuments({ shopUuid, status: 'open' }),
+      store.col(CLOUD_COLLECTIONS.cloudSyncEvents).countDocuments({ shopUuid, originSource: 'cloud_owner' }),
+    ])
+
+    let lastSyncMs = 0
+    for (const inst of activeInstallations) {
+      if (inst.lastSyncAt) {
+        const ms = new Date(inst.lastSyncAt as Date | string).getTime()
+        if (ms > lastSyncMs) lastSyncMs = ms
+      }
+    }
+
+    const nonVoidedSales = salesDocs.filter(s => s.status !== 'voided')
+    const grossSales = nonVoidedSales.reduce((sum, s) => sum + Number(s.totalPaisa ?? 0), 0)
+    const grossProfit = nonVoidedSales.reduce((sum, s) => sum + (Number(s.totalPaisa ?? 0) - Number(s.costPaisa ?? 0)), 0)
+    const todaySales = nonVoidedSales.filter(s => s.businessDate === todayBusinessDate)
+    const todaySalesPaisa = todaySales.reduce((sum, s) => sum + Number(s.totalPaisa ?? 0), 0)
+    const todayProfitPaisa = todaySales.reduce((sum, s) => sum + (Number(s.totalPaisa ?? 0) - Number(s.costPaisa ?? 0)), 0)
+
+    const returnsPaisa =
+      saleReturnsDocs.reduce((sum, r) => sum + Number(r.totalPaisa ?? 0), 0) +
+      manualReturnsDocs.reduce((sum, r) => sum + Number(r.totalPaisa ?? 0), 0)
+
+    const stockByProd = new Map(stockDocs.map(sl => [String(sl.productId), Number(sl.quantityMilli ?? 0)]))
+    const lowStockProducts = productDocs
+      .filter(p => p.isActive !== false && (stockByProd.get(String(p.id)) ?? 0) <= Number(p.lowStockMilli ?? 0))
+      .map(p => ({
+        id: String(p.id),
+        sku: String(p.sku),
+        name: String(p.name),
+        unit: String(p.unit || 'Piece'),
+        quantityMilli: stockByProd.get(String(p.id)) ?? 0,
+        minimumStockMilli: Number(p.lowStockMilli ?? 0),
+      }))
+      .sort((a, b) => a.quantityMilli - b.quantityMilli)
+
+    const customerNames = new Map(customerDocs.map(c => [String(c.id), String(c.name)]))
+    const recentSales = [...salesDocs]
+      .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
+      .slice(0, 10)
+      .map(s => ({
+        id: String(s.id),
+        invoiceNumber: String(s.invoiceNumber),
+        counterId: String(s.counterId),
+        customerName: (s.customerId ? customerNames.get(String(s.customerId)) : undefined) || 'Walk-in Customer',
+        totalPaisa: Number(s.totalPaisa ?? 0),
+        status: String(s.status),
+        completedAt: String(s.completedAt),
+      }))
+
+    const totalExpensesPaisa = expenseDocs.reduce((sum, e) => sum + Number(e.amountPaisa ?? 0), 0)
+    const todayExpensesPaisa = expenseDocs
+      .filter(e => e.businessDate === todayBusinessDate)
+      .reduce((sum, e) => sum + Number(e.amountPaisa ?? 0), 0)
+    const recentExpenses = [...expenseDocs]
+      .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)))
+      .slice(0, 5)
+      .map(e => ({
+        id: String(e.id),
+        expenseNumber: String(e.expenseNumber),
+        businessDate: String(e.businessDate),
+        category: String(e.category),
+        description: String(e.description || ''),
+        method: String(e.method),
+        amountPaisa: Number(e.amountPaisa ?? 0),
+        occurredAt: String(e.occurredAt),
+      }))
+
+    const countersSummary = counterDocs.map(c => {
+      const cSales = nonVoidedSales.filter(s => s.counterId === c.id)
       return {
-        summaryRes: sRes,
-        todaySalesRes: tSalesRes,
-        returnsRes: rRes,
-        lowStockRes: lRes,
-        lowStockItemsRes: liRes,
-        byCounterRes: bcRes,
-        recentSalesRes: rsRes,
-        expensesSummaryRes: expRes,
-        recentExpensesRes: recExpRes,
-        openShiftsRes: osRes,
-        remoteEventsRes: revRes,
+        counterId: String(c.id),
+        counterNumber: Number(c.counterNumber),
+        name: String(c.name),
+        status: String(c.status),
+        lastSeenAt: c.lastSeenAt ? String(c.lastSeenAt) : null,
+        invoiceCount: cSales.length,
+        salesPaisa: cSales.reduce((sum, s) => sum + Number(s.totalPaisa ?? 0), 0),
       }
     })
 
-    const grossSales = Number(summaryRes.rows[0]?.sales_paisa ?? 0)
-    const returnsPaisa = Number(returnsRes.rows[0]?.total_returns_paisa ?? 0)
-
     return {
-      shopUuid: session.shopUuid,
-      businessName: bizRes.rows[0]?.name || 'Vertexia Shop',
-      branchName: bizRes.rows[0]?.branch_name || 'Main Shop',
-      city: bizRes.rows[0]?.city || '',
-      mainPcLastSyncAt: nodeRes.rows[0]?.last_sync_at ? nodeRes.rows[0].last_sync_at.toISOString() : null,
+      shopUuid,
+      businessName: shopDoc ? String(shopDoc.name) : 'Vertexia Shop',
+      branchName: shopDoc ? String(shopDoc.branchName) : 'Main Shop',
+      city: shopDoc ? String(shopDoc.city || '') : '',
+      mainPcLastSyncAt: lastSyncMs > 0 ? new Date(lastSyncMs).toISOString() : null,
       todayBusinessDate,
       summary: {
         grossSalesPaisa: grossSales,
         returnsPaisa,
         netSalesPaisa: grossSales - returnsPaisa,
-        grossProfitPaisa: Number(summaryRes.rows[0]?.profit_paisa ?? 0) - returnsPaisa,
-        invoiceCount: Number(summaryRes.rows[0]?.tx_count ?? 0),
-        lowStockCount: Number(lowStockRes.rows[0]?.cnt ?? 0),
-        todaySalesPaisa: Number(todaySalesRes.rows[0]?.sales_paisa ?? 0),
-        todaySalesCount: Number(todaySalesRes.rows[0]?.tx_count ?? 0),
-        todayProfitPaisa: Number(todaySalesRes.rows[0]?.profit_paisa ?? 0),
-        totalExpensesPaisa: Number(expensesSummaryRes.rows[0]?.total_paisa ?? 0),
-        todayExpensesPaisa: Number(expensesSummaryRes.rows[0]?.today_paisa ?? 0),
-        openShiftsCount: Number(openShiftsRes.rows[0]?.open_count ?? 0),
-        remoteOwnerEventsCount: Number(remoteEventsRes.rows[0]?.total_remote ?? 0),
+        grossProfitPaisa: grossProfit - returnsPaisa,
+        invoiceCount: nonVoidedSales.length,
+        lowStockCount: lowStockProducts.length,
+        todaySalesPaisa,
+        todaySalesCount: todaySales.length,
+        todayProfitPaisa,
+        totalExpensesPaisa,
+        todayExpensesPaisa,
+        openShiftsCount,
+        remoteOwnerEventsCount,
       },
-      counters: byCounterRes.rows.map(r => ({
-        counterId: r.counter_id,
-        counterNumber: Number(r.counter_number),
-        name: r.name,
-        status: r.status,
-        lastSeenAt: r.last_seen_at,
-        invoiceCount: Number(r.invoice_count),
-        salesPaisa: Number(r.sales_paisa),
-      })),
-      recentSales: recentSalesRes.rows.map(r => ({
-        id: r.id,
-        invoiceNumber: r.invoice_number,
-        counterId: r.counter_id,
-        customerName: r.customer_name || 'Walk-in Customer',
-        totalPaisa: Number(r.total_paisa),
-        status: r.status,
-        completedAt: r.completed_at,
-      })),
-      recentExpenses: recentExpensesRes.rows.map(r => ({
-        id: r.id,
-        expenseNumber: r.expense_number,
-        businessDate: r.business_date,
-        category: r.category,
-        description: r.description,
-        method: r.method,
-        amountPaisa: Number(r.amount_paisa),
-        occurredAt: r.occurred_at,
-      })),
-      lowStockProducts: lowStockItemsRes.rows.map(r => ({
-        id: r.id,
-        sku: r.sku,
-        name: r.name,
-        unit: r.unit,
-        quantityMilli: Number(r.quantity_milli),
-        minimumStockMilli: Number(r.low_stock_milli),
-      })),
+      counters: countersSummary,
+      recentSales,
+      recentExpenses,
+      lowStockProducts: lowStockProducts.slice(0, 8),
     }
   })
 
@@ -221,130 +167,154 @@ export function registerRemoteOwnerRoutes(
       dateTo?: string
       search?: string
     }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'sales.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'sales.read', q.shopUuid)
     if (!session) return
 
     const page = Math.max(1, Number(q.page ?? 1) || 1)
     const pageSize = Math.min(100, Math.max(5, Number(q.pageSize ?? 25) || 25))
     const offset = (page - 1) * pageSize
-    const params: unknown[] = []
-    let where = 'WHERE 1=1'
-    if (q.counterId) {
-      params.push(q.counterId)
-      where += ` AND s.counter_id = $${params.length}`
-    }
+
+    const filter: Record<string, unknown> = { shopUuid: session.shopUuid }
+    if (q.counterId) filter.counterId = q.counterId
     if (q.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(q.dateFrom)) {
-      params.push(q.dateFrom)
-      where += ` AND s.business_date >= $${params.length}`
+      filter.businessDate = { ...(filter.businessDate as object), $gte: q.dateFrom }
     }
     if (q.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(q.dateTo)) {
-      params.push(q.dateTo)
-      where += ` AND s.business_date <= $${params.length}`
-    }
-    if (q.search?.trim()) {
-      params.push(`%${q.search.trim()}%`)
-      const idx = params.length
-      where += ` AND (s.invoice_number ILIKE $${idx} OR COALESCE(c.name, '') ILIKE $${idx} OR COALESCE(c.phone, '') ILIKE $${idx})`
+      filter.businessDate = { ...(filter.businessDate as object), $lte: q.dateTo }
     }
 
-    const { totalRes, rowsRes } = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const tRes = await client.query<{ cnt: string }>(
-        `SELECT COUNT(*) AS cnt FROM sales s LEFT JOIN customers c ON c.id = s.customer_id ${where}`,
-        params,
-      )
-      const rRes = await client.query(
-        `SELECT s.*, c.name AS customer_name, u.name AS cashier_name, cnt.name AS counter_name
-         FROM sales s
-         LEFT JOIN customers c ON c.id = s.customer_id
-         LEFT JOIN users u ON u.id = s.cashier_id
-         LEFT JOIN counters cnt ON cnt.id = s.counter_id
-         ${where}
-         ORDER BY s.completed_at DESC
-         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-        [...params, pageSize, offset],
-      )
-      return { totalRes: tRes, rowsRes: rRes }
-    })
+    const [customers, users, counters] = await Promise.all([
+      store.col(CLOUD_COLLECTIONS.customers).find({ shopUuid: session.shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.cloudUsers).find({ shopUuid: session.shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.counters).find({ shopUuid: session.shopUuid }).toArray(),
+    ])
+    const customerMap = new Map(customers.map(c => [String(c.id), c]))
+    const userMap = new Map(users.map(u => [String(u.userId), String(u.name)]))
+    const counterMap = new Map(counters.map(c => [String(c.id), String(c.name)]))
+
+    if (q.search?.trim()) {
+      const needle = q.search.trim().toLowerCase()
+      const matchingCustomerIds = customers
+        .filter(c => String(c.name || '').toLowerCase().includes(needle) || String(c.phone || '').toLowerCase().includes(needle))
+        .map(c => String(c.id))
+      const re = new RegExp(escapeRegex(q.search.trim()), 'i')
+      filter.$or = [
+        { invoiceNumber: re },
+        ...(matchingCustomerIds.length ? [{ customerId: { $in: matchingCustomerIds } }] : []),
+      ]
+    }
+
+    const total = await store.col(CLOUD_COLLECTIONS.sales).countDocuments(filter)
+    const docs = await store
+      .col(CLOUD_COLLECTIONS.sales)
+      .find(filter)
+      .sort({ completedAt: -1 })
+      .skip(offset)
+      .limit(pageSize)
+      .toArray()
 
     return {
-      total: Number(totalRes.rows[0].cnt),
+      total,
       page,
       pageSize,
-      sales: rowsRes.rows.map(r => ({
-        ...r,
-        subtotal_paisa: Number(r.subtotal_paisa),
-        discount_paisa: Number(r.discount_paisa),
-        tax_paisa: Number(r.tax_paisa),
-        total_paisa: Number(r.total_paisa),
-        cost_paisa: Number(r.cost_paisa),
-        paid_paisa: Number(r.paid_paisa),
+      sales: docs.map(s => ({
+        id: String(s.id),
+        invoice_number: String(s.invoiceNumber),
+        business_date: String(s.businessDate),
+        counter_id: String(s.counterId),
+        counter_name: counterMap.get(String(s.counterId)) || String(s.counterId),
+        cashier_id: String(s.cashierId),
+        cashier_name: userMap.get(String(s.cashierId)) || null,
+        customer_id: s.customerId ? String(s.customerId) : null,
+        customer_name: (s.customerId ? customerMap.get(String(s.customerId))?.name : null) || null,
+        status: String(s.status),
+        payment_method: String(s.paymentMethod),
+        subtotal_paisa: Number(s.subtotalPaisa ?? 0),
+        discount_paisa: Number(s.discountPaisa ?? 0),
+        tax_paisa: Number(s.taxPaisa ?? 0),
+        total_paisa: Number(s.totalPaisa ?? 0),
+        cost_paisa: Number(s.costPaisa ?? 0),
+        paid_paisa: Number(s.paidPaisa ?? 0),
+        completed_at: String(s.completedAt),
+        note: s.note ? String(s.note) : null,
       })),
     }
   })
 
-  // GET /api/cloud/owner/sales/:id — Full invoice detail view
+  // GET /api/cloud/owner/sales/:id
   app.get('/api/cloud/owner/sales/:id', async (request, reply) => {
     const params = request.params as { id: string }
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'sales.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'sales.read', q.shopUuid)
     if (!session) return
 
-    const detail = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const saleRes = await client.query(
-        `SELECT s.*, c.name AS customer_name, c.phone AS customer_phone,
-                u.name AS cashier_name, cnt.name AS counter_name
-         FROM sales s
-         LEFT JOIN customers c ON c.id = s.customer_id
-         LEFT JOIN users u ON u.id = s.cashier_id
-         LEFT JOIN counters cnt ON cnt.id = s.counter_id
-         WHERE s.id = $1`,
-        [params.id],
-      )
-      if (!saleRes.rows.length) return null
-
-      const itemsRes = await client.query('SELECT * FROM sale_items WHERE sale_id = $1 ORDER BY id ASC', [params.id])
-      const payRes = await client.query('SELECT * FROM sale_payments WHERE sale_id = $1 ORDER BY occurred_at ASC', [params.id])
-      const retRes = await client.query('SELECT * FROM sale_returns WHERE sale_id = $1 ORDER BY occurred_at DESC', [params.id])
-      return {
-        sale: saleRes.rows[0],
-        items: itemsRes.rows,
-        payments: payRes.rows,
-        returns: retRes.rows,
-      }
-    })
-
-    if (!detail) {
+    const s = await store.col(CLOUD_COLLECTIONS.sales).findOne({ shopUuid: session.shopUuid, id: params.id })
+    if (!s) {
       return reply.status(404).send({ error: 'NotFound', message: 'Sale invoice not found.', statusCode: 404 })
     }
 
-    const s = detail.sale
+    const [customer, cashier, counter, returnsDocs] = await Promise.all([
+      s.customerId ? store.col(CLOUD_COLLECTIONS.customers).findOne({ shopUuid: session.shopUuid, id: String(s.customerId) }) : null,
+      store.col(CLOUD_COLLECTIONS.cloudUsers).findOne({ shopUuid: session.shopUuid, userId: String(s.cashierId) }),
+      store.col(CLOUD_COLLECTIONS.counters).findOne({ shopUuid: session.shopUuid, id: String(s.counterId) }),
+      store.col(CLOUD_COLLECTIONS.saleReturns).find({ shopUuid: session.shopUuid, saleId: params.id }).sort({ occurredAt: -1 }).toArray(),
+    ])
+
+    const items = Array.isArray(s.items) ? (s.items as Array<Record<string, unknown>>) : []
+    const payments = Array.isArray(s.payments) ? (s.payments as Array<Record<string, unknown>>) : []
+
     return {
       sale: {
-        ...s,
-        subtotal_paisa: Number(s.subtotal_paisa),
-        discount_paisa: Number(s.discount_paisa),
-        tax_paisa: Number(s.tax_paisa),
-        total_paisa: Number(s.total_paisa),
-        cost_paisa: Number(s.cost_paisa),
-        paid_paisa: Number(s.paid_paisa),
+        id: String(s.id),
+        invoice_number: String(s.invoiceNumber),
+        business_date: String(s.businessDate),
+        counter_id: String(s.counterId),
+        counter_name: counter ? String(counter.name) : String(s.counterId),
+        cashier_id: String(s.cashierId),
+        cashier_name: cashier ? String(cashier.name) : null,
+        customer_id: s.customerId ? String(s.customerId) : null,
+        customer_name: customer ? String(customer.name) : null,
+        customer_phone: customer?.phone ? String(customer.phone) : null,
+        status: String(s.status),
+        payment_method: String(s.paymentMethod),
+        subtotal_paisa: Number(s.subtotalPaisa ?? 0),
+        discount_paisa: Number(s.discountPaisa ?? 0),
+        tax_paisa: Number(s.taxPaisa ?? 0),
+        total_paisa: Number(s.totalPaisa ?? 0),
+        cost_paisa: Number(s.costPaisa ?? 0),
+        paid_paisa: Number(s.paidPaisa ?? 0),
+        completed_at: String(s.completedAt),
+        note: s.note ? String(s.note) : null,
       },
-      items: detail.items.map(i => ({
-        ...i,
-        quantity_milli: Number(i.quantity_milli),
-        unit_price_paisa: Number(i.unit_price_paisa),
-        cost_price_paisa: Number(i.cost_price_paisa),
-        line_total_paisa: Number(i.line_total_paisa),
+      items: items.map(i => ({
+        id: String(i.id),
+        product_id: String(i.productId),
+        product_name_snapshot: String(i.productNameSnapshot || ''),
+        sku_snapshot: String(i.skuSnapshot || ''),
+        unit_snapshot: String(i.unitSnapshot || 'Piece'),
+        quantity_milli: Number(i.quantityMilli ?? 0),
+        unit_price_paisa: Number(i.unitPricePaisa ?? 0),
+        cost_price_paisa: Number(i.costPricePaisa ?? 0),
+        tax_rate_bps: Number(i.taxRateBps ?? 0),
+        line_total_paisa: Number(i.lineTotalPaisa ?? 0),
       })),
-      payments: detail.payments.map(p => ({
-        ...p,
-        amount_paisa: Number(p.amount_paisa),
+      payments: payments.map(p => ({
+        id: String(p.id),
+        method: String(p.method),
+        amount_paisa: Number(p.amountPaisa ?? 0),
+        reference: String(p.reference || ''),
+        occurred_at: String(p.occurredAt || s.completedAt),
       })),
-      returns: detail.returns.map(r => ({
-        ...r,
-        subtotal_paisa: Number(r.subtotal_paisa),
-        tax_paisa: Number(r.tax_paisa),
-        total_paisa: Number(r.total_paisa),
-        cost_paisa: Number(r.cost_paisa),
+      returns: returnsDocs.map(r => ({
+        id: String(r.id),
+        return_number: String(r.returnNumber),
+        refund_method: String(r.refundMethod),
+        subtotal_paisa: Number(r.subtotalPaisa ?? 0),
+        tax_paisa: Number(r.taxPaisa ?? 0),
+        total_paisa: Number(r.totalPaisa ?? 0),
+        cost_paisa: Number(r.costPaisa ?? 0),
+        note: String(r.note || ''),
+        occurred_at: String(r.occurredAt),
       })),
     }
   })
@@ -359,50 +329,47 @@ export function registerRemoteOwnerRoutes(
       dateTo?: string
       search?: string
     }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'retail.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'retail.read', q.shopUuid)
     if (!session) return
 
     const page = Math.max(1, Number(q.page ?? 1) || 1)
     const pageSize = Math.min(100, Math.max(5, Number(q.pageSize ?? 50) || 50))
     const offset = (page - 1) * pageSize
-    const params: unknown[] = []
-    let where = 'WHERE 1=1'
+
+    const filter: Record<string, unknown> = { shopUuid: session.shopUuid }
     if (q.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(q.dateFrom)) {
-      params.push(q.dateFrom)
-      where += ` AND p.business_date >= $${params.length}`
+      filter.businessDate = { ...(filter.businessDate as object), $gte: q.dateFrom }
     }
     if (q.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(q.dateTo)) {
-      params.push(q.dateTo)
-      where += ` AND p.business_date <= $${params.length}`
+      filter.businessDate = { ...(filter.businessDate as object), $lte: q.dateTo }
     }
     if (q.search?.trim()) {
-      params.push(`%${q.search.trim()}%`)
-      const idx = params.length
-      where += ` AND (p.purchase_number ILIKE $${idx} OR p.supplier_name_snapshot ILIKE $${idx})`
+      const re = new RegExp(escapeRegex(q.search.trim()), 'i')
+      filter.$or = [{ purchaseNumber: re }, { supplierNameSnapshot: re }]
     }
 
-    const { totalRes, rowsRes } = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const tRes = await client.query<{ cnt: string }>(`SELECT COUNT(*) AS cnt FROM purchases p ${where}`, params)
-      const rRes = await client.query(
-        `SELECT p.*, u.name AS created_by_name
-         FROM purchases p
-         LEFT JOIN users u ON u.id = p.created_by
-         ${where}
-         ORDER BY p.occurred_at DESC
-         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-        [...params, pageSize, offset],
-      )
-      return { totalRes: tRes, rowsRes: rRes }
-    })
+    const [total, docs, users] = await Promise.all([
+      store.col(CLOUD_COLLECTIONS.purchases).countDocuments(filter),
+      store.col(CLOUD_COLLECTIONS.purchases).find(filter).sort({ occurredAt: -1 }).skip(offset).limit(pageSize).toArray(),
+      store.col(CLOUD_COLLECTIONS.cloudUsers).find({ shopUuid: session.shopUuid }).toArray(),
+    ])
+    const userMap = new Map(users.map(u => [String(u.userId), String(u.name)]))
 
     return {
-      total: Number(totalRes.rows[0].cnt),
+      total,
       page,
       pageSize,
-      purchases: rowsRes.rows.map(r => ({
-        ...r,
-        total_paisa: Number(r.total_paisa),
-        paid_paisa: Number(r.paid_paisa),
+      purchases: docs.map(r => ({
+        id: String(r.id),
+        supplier_id: String(r.supplierId),
+        supplier_name_snapshot: String(r.supplierNameSnapshot || ''),
+        purchase_number: String(r.purchaseNumber),
+        business_date: String(r.businessDate),
+        total_paisa: Number(r.totalPaisa ?? 0),
+        paid_paisa: Number(r.paidPaisa ?? 0),
+        note: String(r.note || ''),
+        created_by_name: userMap.get(String(r.createdBy)) || null,
+        occurred_at: String(r.occurredAt),
       })),
     }
   })
@@ -410,46 +377,50 @@ export function registerRemoteOwnerRoutes(
   // GET /api/cloud/owner/cash-shifts
   app.get('/api/cloud/owner/cash-shifts', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'shifts.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'shifts.read', q.shopUuid)
     if (!session) return
 
-    const { shiftsRes, movesRes } = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const sRes = await client.query(
-        `SELECT cs.*, u.name AS cashier_name, cnt.name AS counter_name
-         FROM cash_shifts cs
-         LEFT JOIN users u ON u.id = cs.cashier_id
-         LEFT JOIN counters cnt ON cnt.id = cs.counter_id
-         ORDER BY cs.opened_at DESC LIMIT 100`,
-      )
-      const mRes = await client.query(
-        `SELECT cm.*, u.name AS created_by_name
-         FROM cash_movements cm
-         LEFT JOIN users u ON u.id = cm.created_by
-         ORDER BY cm.occurred_at DESC LIMIT 250`,
-      )
-      return { shiftsRes: sRes, movesRes: mRes }
-    })
+    const [shiftsDocs, movesDocs, users, counters] = await Promise.all([
+      store.col(CLOUD_COLLECTIONS.cashShifts).find({ shopUuid: session.shopUuid }).sort({ openedAt: -1 }).limit(100).toArray(),
+      store.col(CLOUD_COLLECTIONS.cashMovements).find({ shopUuid: session.shopUuid }).sort({ occurredAt: -1 }).limit(250).toArray(),
+      store.col(CLOUD_COLLECTIONS.cloudUsers).find({ shopUuid: session.shopUuid }).toArray(),
+      store.col(CLOUD_COLLECTIONS.counters).find({ shopUuid: session.shopUuid }).toArray(),
+    ])
+    const userMap = new Map(users.map(u => [String(u.userId), String(u.name)]))
+    const counterMap = new Map(counters.map(c => [String(c.id), String(c.name)]))
 
     const movementsByShift = new Map<string, Array<Record<string, unknown>>>()
-    const recentMovements = movesRes.rows.map(m => {
+    const recentMovements = movesDocs.map(m => {
       const item = {
-        ...m,
-        amount_paisa: Number(m.amount_paisa),
+        id: String(m.id),
+        shift_id: String(m.shiftId),
+        movement_type: String(m.movementType),
+        amount_paisa: Number(m.amountPaisa ?? 0),
+        reason: String(m.reason || ''),
+        created_by_name: userMap.get(String(m.createdBy)) || null,
+        occurred_at: String(m.occurredAt),
       }
-      const key = String(m.shift_id)
-      const list = movementsByShift.get(key)
+      const list = movementsByShift.get(item.shift_id)
       if (list) list.push(item)
-      else movementsByShift.set(key, [item])
+      else movementsByShift.set(item.shift_id, [item])
       return item
     })
 
     return {
-      shifts: shiftsRes.rows.map(r => ({
-        ...r,
-        opening_cash_paisa: Number(r.opening_cash_paisa),
-        expected_cash_paisa: r.expected_cash_paisa !== null ? Number(r.expected_cash_paisa) : null,
-        counted_cash_paisa: r.counted_cash_paisa !== null ? Number(r.counted_cash_paisa) : null,
-        variance_paisa: r.variance_paisa !== null ? Number(r.variance_paisa) : null,
+      shifts: shiftsDocs.map(r => ({
+        id: String(r.id),
+        counter_id: String(r.counterId),
+        counter_name: counterMap.get(String(r.counterId)) || String(r.counterId),
+        cashier_id: String(r.cashierId),
+        cashier_name: userMap.get(String(r.cashierId)) || null,
+        status: String(r.status),
+        opening_cash_paisa: Number(r.openingCashPaisa ?? 0),
+        expected_cash_paisa: r.expectedCashPaisa !== null && r.expectedCashPaisa !== undefined ? Number(r.expectedCashPaisa) : null,
+        counted_cash_paisa: r.countedCashPaisa !== null && r.countedCashPaisa !== undefined ? Number(r.countedCashPaisa) : null,
+        variance_paisa: r.variancePaisa !== null && r.variancePaisa !== undefined ? Number(r.variancePaisa) : null,
+        note: r.note ? String(r.note) : null,
+        opened_at: String(r.openedAt),
+        closed_at: r.closedAt ? String(r.closedAt) : null,
         movements: movementsByShift.get(String(r.id)) ?? [],
       })),
       recentMovements,
@@ -459,195 +430,185 @@ export function registerRemoteOwnerRoutes(
   // GET /api/cloud/owner/staff (non-sensitive fields only, never password hashes)
   app.get('/api/cloud/owner/staff', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'users.manage', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'users.manage', q.shopUuid)
     if (!session) return
 
-    const tenantRes = await tenantManager.queryTenant(
-      session.shopUuid,
-      `SELECT id, business_id, name, username, role, is_active, allowed_tabs, sync_version, created_at, updated_at
-       FROM users ORDER BY role = 'Owner' DESC, name ASC`,
-    )
-    const centralRes = await centralPool.query<{
-      id: string
-      branch_id: string
-      credential_version: number
-      must_change_password: boolean
-      updated_at: Date
-    }>(
-      `SELECT id, branch_id, credential_version, must_change_password, updated_at
-       FROM vtx_central.central_users WHERE shop_uuid = $1`,
-      [session.shopUuid],
-    )
-    const byId = new Map(centralRes.rows.map(r => [r.id, r]))
-
-    return {
-      staff: tenantRes.rows.map(u => {
-        const c = byId.get(String(u.id))
-        return {
-          id: u.id,
-          businessId: u.business_id,
-          name: u.name,
-          username: u.username,
-          role: u.role,
-          isActive: Boolean(u.is_active),
-          allowedTabs: u.allowed_tabs ?? null,
-          syncVersion: Number(u.sync_version),
-          branchId: c?.branch_id ?? null,
-          credentialVersion: c ? Number(c.credential_version) : null,
-          mustChangePassword: c ? Boolean(c.must_change_password) : false,
-          createdAt: u.created_at,
-          updatedAt: u.updated_at,
-        }
-      }),
-    }
-  })
-
-  // GET /api/cloud/owner/sync-status — Detailed cloud sync & installation telemetry
-  app.get('/api/cloud/owner/sync-status', async (request, reply) => {
-    const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'reports.read', q.shopUuid)
-    if (!session) return
-
-    const instRes = await centralPool.query<{
-      node_id: string
-      sync_epoch: number
-      app_version: string | null
-      last_ip: string | null
-      status: string
-      last_sync_at: Date | null
-      created_at: Date
-    }>(
-      `SELECT node_id, sync_epoch, app_version, last_ip, status, last_sync_at, created_at
-       FROM vtx_central.installations
-       WHERE shop_uuid = $1
-       ORDER BY created_at ASC`,
-      [session.shopUuid],
-    )
-
-    const tenantStats = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const processed = await client.query<{ cnt: string; last_at: Date | null }>(
-        'SELECT COUNT(*) AS cnt, MAX(processed_at) AS last_at FROM processed_sync_events',
-      )
-      const cloudEvents = await client.query<{ cnt: string; max_seq: string | null }>(
-        `SELECT COUNT(*) AS cnt, MAX(cloud_seq) AS max_seq FROM cloud_sync_events WHERE origin_source = 'cloud_owner'`,
-      )
-      const conflicts = await client.query<{ cnt: string }>('SELECT COUNT(*) AS cnt FROM sync_conflicts')
-      return {
-        processedEventsCount: Number(processed.rows[0]?.cnt ?? 0),
-        lastProcessedAt: processed.rows[0]?.last_at ? processed.rows[0].last_at.toISOString() : null,
-        cloudOwnerEventsCount: Number(cloudEvents.rows[0]?.cnt ?? 0),
-        latestCloudSeq: Number(cloudEvents.rows[0]?.max_seq ?? 0),
-        conflictsCount: Number(conflicts.rows[0]?.cnt ?? 0),
-      }
+    const docs = await store
+      .col(CLOUD_COLLECTIONS.cloudUsers)
+      .find({ shopUuid: session.shopUuid }, { projection: { passwordHash: 0 } })
+      .toArray()
+    docs.sort((a, b) => {
+      if (a.role === 'Owner' && b.role !== 'Owner') return -1
+      if (b.role === 'Owner' && a.role !== 'Owner') return 1
+      return String(a.name).localeCompare(String(b.name))
     })
 
     return {
-      shopUuid: session.shopUuid,
-      installations: instRes.rows.map(i => ({
-        nodeId: i.node_id,
+      staff: docs.map(u => ({
+        id: String(u.userId),
+        name: String(u.name),
+        username: u.username ? String(u.username) : null,
+        role: String(u.role),
+        isActive: Boolean(u.isActive),
+        allowedTabs: u.allowedTabs ?? null,
+        syncVersion: Number(u.syncVersion ?? 1),
+        branchId: u.branchId ? String(u.branchId) : null,
+        credentialVersion: Number(u.credentialVersion ?? 1),
+        mustChangePassword: Boolean(u.mustChangePassword),
+        createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt),
+        updatedAt: u.updatedAt instanceof Date ? u.updatedAt.toISOString() : String(u.updatedAt),
+      })),
+    }
+  })
+
+  // GET /api/cloud/owner/sync-status
+  app.get('/api/cloud/owner/sync-status', async (request, reply) => {
+    const q = request.query as { shopUuid?: string }
+    const session = await enforceCloudOwner(request, reply, store, 'reports.read', q.shopUuid)
+    if (!session) return
+
+    const shopUuid = session.shopUuid
+    const [installations, processedEventsCount, latestProcessed, cloudOwnerEventsCount, latestCloudEvt, conflictsCount] =
+      await Promise.all([
+        store.col(CLOUD_COLLECTIONS.installations).find({ shopUuid }).sort({ createdAt: 1 }).toArray(),
+        store.col(CLOUD_COLLECTIONS.processedSyncEvents).countDocuments({ shopUuid }),
+        store.col(CLOUD_COLLECTIONS.processedSyncEvents).find({ shopUuid }).sort({ processedAt: -1 }).limit(1).toArray(),
+        store.col(CLOUD_COLLECTIONS.cloudSyncEvents).countDocuments({ shopUuid, originSource: 'cloud_owner' }),
+        store.col(CLOUD_COLLECTIONS.cloudSyncEvents).find({ shopUuid, originSource: 'cloud_owner' }).sort({ cloudSeq: -1 }).limit(1).toArray(),
+        store.col(CLOUD_COLLECTIONS.syncConflicts).countDocuments({ shopUuid }),
+      ])
+
+    return {
+      shopUuid,
+      installations: installations.map(i => ({
+        nodeId: String(i.nodeId),
         nodeType: 'main_pc',
         deviceName: 'Shop Main PC',
-        syncEpoch: Number(i.sync_epoch ?? 1),
-        appVersion: i.app_version || '1.0.0',
-        lastIp: i.last_ip || null,
-        status: i.status,
-        lastSyncAt: i.last_sync_at ? i.last_sync_at.toISOString() : null,
-        registeredAt: i.created_at.toISOString(),
+        syncEpoch: Number(i.syncEpoch ?? 1),
+        appVersion: String(i.appVersion || '1.0.0'),
+        lastIp: i.lastIp ? String(i.lastIp) : null,
+        status: String(i.status),
+        lastSyncAt: i.lastSyncAt ? new Date(i.lastSyncAt as Date | string).toISOString() : null,
+        registeredAt: i.createdAt ? new Date(i.createdAt as Date | string).toISOString() : new Date().toISOString(),
       })),
-      ...tenantStats,
+      processedEventsCount,
+      lastProcessedAt: latestProcessed[0]?.processedAt ? String(latestProcessed[0].processedAt) : null,
+      cloudOwnerEventsCount,
+      latestCloudSeq: Number(latestCloudEvt[0]?.cloudSeq ?? 0),
+      conflictsCount,
     }
   })
 
   // GET /api/cloud/owner/reports
   app.get('/api/cloud/owner/reports', async (request, reply) => {
     const q = request.query as { shopUuid?: string; dateFrom?: string; dateTo?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'reports.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'reports.read', q.shopUuid)
     if (!session) return
 
     const dateFrom = q.dateFrom || '1970-01-01'
     const dateTo = q.dateTo || '2999-12-31'
+    const shopUuid = session.shopUuid
 
-    const { trendRes, counterRes, expenseRes } = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const tRes = await client.query(
-        `SELECT business_date, COUNT(*)::INTEGER AS invoices, COALESCE(SUM(total_paisa), 0) AS sales_paisa,
-                COALESCE(SUM(total_paisa - cost_paisa), 0) AS gross_profit_paisa
-         FROM sales
-         WHERE status <> 'voided' AND business_date BETWEEN $1 AND $2
-         GROUP BY business_date ORDER BY business_date ASC`,
-        [dateFrom, dateTo],
-      )
-      const cRes = await client.query(
-        `SELECT COALESCE(c.id, s.counter_id) AS counter_id, COALESCE(c.counter_number, 1) AS counter_number,
-                COALESCE(c.name, s.counter_id) AS name, COUNT(*)::INTEGER AS invoice_count,
-                COALESCE(SUM(s.total_paisa), 0) AS sales_paisa
-         FROM sales s
-         LEFT JOIN counters c ON c.id = s.counter_id
-         WHERE s.status <> 'voided' AND s.business_date BETWEEN $1 AND $2
-         GROUP BY COALESCE(c.id, s.counter_id), COALESCE(c.counter_number, 1), COALESCE(c.name, s.counter_id)
-         ORDER BY counter_number ASC`,
-        [dateFrom, dateTo],
-      )
-      const eRes = await client.query(
-        `SELECT category, COALESCE(SUM(amount_paisa), 0) AS net_paisa
-         FROM expenses WHERE business_date BETWEEN $1 AND $2
-         GROUP BY category ORDER BY net_paisa DESC`,
-        [dateFrom, dateTo],
-      )
-      return { trendRes: tRes, counterRes: cRes, expenseRes: eRes }
-    })
+    const [salesDocs, counters, expenses] = await Promise.all([
+      store
+        .col(CLOUD_COLLECTIONS.sales)
+        .find({ shopUuid, status: { $ne: 'voided' }, businessDate: { $gte: dateFrom, $lte: dateTo } })
+        .toArray(),
+      store.col(CLOUD_COLLECTIONS.counters).find({ shopUuid }).toArray(),
+      store
+        .col(CLOUD_COLLECTIONS.expenses)
+        .find({ shopUuid, businessDate: { $gte: dateFrom, $lte: dateTo } })
+        .toArray(),
+    ])
+
+    const trendMap = new Map<string, { date: string; invoices: number; salesPaisa: number; grossProfitPaisa: number }>()
+    const counterAgg = new Map<string, { counterId: string; invoiceCount: number; salesPaisa: number }>()
+    for (const s of salesDocs) {
+      const date = String(s.businessDate)
+      const total = Number(s.totalPaisa ?? 0)
+      const profit = total - Number(s.costPaisa ?? 0)
+      const t = trendMap.get(date) || { date, invoices: 0, salesPaisa: 0, grossProfitPaisa: 0 }
+      t.invoices += 1
+      t.salesPaisa += total
+      t.grossProfitPaisa += profit
+      trendMap.set(date, t)
+
+      const cid = String(s.counterId)
+      const c = counterAgg.get(cid) || { counterId: cid, invoiceCount: 0, salesPaisa: 0 }
+      c.invoiceCount += 1
+      c.salesPaisa += total
+      counterAgg.set(cid, c)
+    }
+
+    const counterInfo = new Map(counters.map(c => [String(c.id), c]))
+    const byCounter = [...counterAgg.values()]
+      .map(c => {
+        const info = counterInfo.get(c.counterId)
+        return {
+          counterId: c.counterId,
+          counterNumber: Number(info?.counterNumber ?? 1),
+          name: String(info?.name || c.counterId),
+          invoiceCount: c.invoiceCount,
+          salesPaisa: c.salesPaisa,
+        }
+      })
+      .sort((a, b) => a.counterNumber - b.counterNumber)
+
+    const expByCat = new Map<string, number>()
+    for (const e of expenses) {
+      const cat = String(e.category || 'General')
+      expByCat.set(cat, (expByCat.get(cat) ?? 0) + Number(e.amountPaisa ?? 0))
+    }
 
     return {
       dateFrom,
       dateTo,
-      salesTrend: trendRes.rows.map(r => ({
-        date: r.business_date,
-        invoices: Number(r.invoices),
-        salesPaisa: Number(r.sales_paisa),
-        grossProfitPaisa: Number(r.gross_profit_paisa),
-      })),
-      byCounter: counterRes.rows.map(r => ({
-        counterId: r.counter_id,
-        counterNumber: Number(r.counter_number),
-        name: r.name,
-        invoiceCount: Number(r.invoice_count),
-        salesPaisa: Number(r.sales_paisa),
-      })),
-      expensesByCategory: expenseRes.rows.map(r => ({
-        category: r.category,
-        netPaisa: Number(r.net_paisa),
-      })),
+      salesTrend: [...trendMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
+      byCounter,
+      expensesByCategory: [...expByCat.entries()]
+        .map(([category, netPaisa]) => ({ category, netPaisa }))
+        .sort((a, b) => b.netPaisa - a.netPaisa),
     }
   })
 
   // GET /api/cloud/owner/products
   app.get('/api/cloud/owner/products', async (request, reply) => {
     const q = request.query as { shopUuid?: string; search?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'products.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'products.read', q.shopUuid)
     if (!session) return
 
-    const search = q.search?.trim()
-    const params: unknown[] = []
-    let sql = `SELECT p.*, COALESCE(sl.quantity_milli, 0) AS quantity_milli
-               FROM products p LEFT JOIN stock_levels sl ON sl.product_id = p.id AND sl.branch_id = $1`
-    params.push(session.branchId)
-    if (search) {
-      params.push(`%${search}%`)
-      sql += ` WHERE (p.name ILIKE $2 OR p.sku ILIKE $2 OR COALESCE(p.barcode, '') ILIKE $2)`
+    const filter: Record<string, unknown> = { shopUuid: session.shopUuid, isDeleted: { $ne: true } }
+    if (q.search?.trim()) {
+      const re = new RegExp(escapeRegex(q.search.trim()), 'i')
+      filter.$or = [{ name: re }, { sku: re }, { barcode: re }]
     }
-    sql += ' ORDER BY p.name ASC LIMIT 500'
-    const { rows } = await tenantManager.queryTenant(session.shopUuid, sql, params)
+
+    const [docs, stockDocs] = await Promise.all([
+      store.col(CLOUD_COLLECTIONS.products).find(filter).sort({ name: 1 }).limit(500).toArray(),
+      store.col(CLOUD_COLLECTIONS.stockLevels).find({ shopUuid: session.shopUuid, branchId: session.branchId }).toArray(),
+    ])
+    const stockMap = new Map(stockDocs.map(s => [String(s.productId), Number(s.quantityMilli ?? 0)]))
+
     return {
-      products: rows.map(r => ({
-        ...r,
-        cost_price_paisa: Number(r.cost_price_paisa),
-        sale_price_paisa: Number(r.sale_price_paisa),
-        low_stock_milli: Number(r.low_stock_milli),
-        quantity_milli: Number(r.quantity_milli),
+      products: docs.map(p => ({
+        id: String(p.id),
+        sku: String(p.sku),
+        barcode: p.barcode ? String(p.barcode) : null,
+        name: String(p.name),
+        category: String(p.category || 'General'),
+        unit: String(p.unit || 'Piece'),
+        cost_price_paisa: Number(p.costPricePaisa ?? 0),
+        sale_price_paisa: Number(p.salePricePaisa ?? 0),
+        low_stock_milli: Number(p.lowStockMilli ?? 0),
+        quantity_milli: stockMap.get(String(p.id)) ?? 0,
+        is_active: p.isActive !== false,
+        sync_version: Number(p.syncVersion ?? 1),
+        updated_at: String(p.updatedAt || p.createdAt || ''),
       })),
     }
   })
 
-  // POST /api/cloud/owner/products — Create product remotely (even if Main PC is OFF)
+  // POST /api/cloud/owner/products
   app.post('/api/cloud/owner/products', async (request, reply) => {
     const body = (request.body as {
       shopUuid?: string
@@ -662,84 +623,104 @@ export function registerRemoteOwnerRoutes(
       minimumStockMilli?: number
       openingStockMilli?: number
     }) || {}
-    const session = await enforceCloudOwner(request, reply, centralPool, 'products.manage', body.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'products.manage', body.shopUuid)
     if (!session) return
 
     if (!body.name?.trim() || !Number.isSafeInteger(body.salePricePaisa) || (body.salePricePaisa ?? 0) <= 0) {
       return reply.status(400).send({ error: 'BadRequest', message: 'Valid product name and salePricePaisa > 0 required.', statusCode: 400 })
     }
 
+    const shopUuid = session.shopUuid
     const id = body.id?.trim() || `product-${randomUUID()}`
     const sku = body.sku?.trim().toUpperCase() || `PRD-${randomUUID().slice(0, 8).toUpperCase()}`
     const nowIso = new Date().toISOString()
     const openingQty = Number(body.openingStockMilli ?? 0)
     const costPrice = Number(body.costPricePaisa ?? 0)
+    const branch = await store.col(CLOUD_COLLECTIONS.branches).findOne({ shopUuid, id: session.branchId })
+    const businessId = branch ? String(branch.businessId) : 'business-noor-mart'
 
-    const evt = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const branchRes = await client.query<{ business_id: string }>('SELECT business_id FROM branches WHERE id = $1 LIMIT 1', [session.branchId])
-      const businessId = branchRes.rows[0]?.business_id || 'business-noor-mart'
-
-      await client.query(
-        `INSERT INTO products (id, business_id, sku, barcode, name, category, unit, cost_price_paisa, sale_price_paisa, low_stock_milli, is_active, sync_version, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,1,$11,$11)`,
-        [
-          id,
-          businessId,
-          sku,
-          body.barcode || null,
-          body.name!.trim(),
-          body.category?.trim() || 'General',
-          body.unit?.trim() || 'Piece',
-          costPrice,
-          body.salePricePaisa,
-          Number(body.minimumStockMilli ?? 0),
-          nowIso,
-        ],
-      )
-      await client.query(
-        `INSERT INTO stock_levels (branch_id, product_id, quantity_milli, sync_version, updated_at) VALUES ($1,$2,$3,1,$4)`,
-        [session.branchId, id, openingQty, nowIso],
-      )
-      if (openingQty > 0) {
-        await client.query(
-          `INSERT INTO stock_movements (id, branch_id, product_id, movement_type, quantity_delta_milli, reference_type, reference_id, origin_source, counter_id, note, occurred_at)
-           VALUES ($1,$2,$3,'opening_stock',$4,'cloud_product',$5,'cloud_owner','cloud','Remote opening stock',$6)`,
-          [`stock-${randomUUID()}`, session.branchId, id, openingQty, id, nowIso],
-        )
-      }
-
-      return appendCloudOwnerEvent(client, {
-        entityType: 'product',
-        entityId: id,
-        operation: 'upsert',
-        payload: {
-          id,
-          businessId,
-          branchId: session.branchId,
-          sku,
-          barcode: body.barcode || null,
-          name: body.name!.trim(),
-          category: body.category?.trim() || 'General',
-          unit: body.unit?.trim() || 'Piece',
-          costPricePaisa: costPrice,
-          salePricePaisa: body.salePricePaisa,
-          minimumStockMilli: Number(body.minimumStockMilli ?? 0),
-          openingStockMilli: openingQty,
-          isActive: true,
-          syncVersion: 1,
-        },
-      })
+    await store.col(CLOUD_COLLECTIONS.products).insertOne({
+      _id: `${shopUuid}:${id}` as any,
+      id,
+      shopUuid,
+      businessId,
+      sku,
+      barcode: body.barcode || null,
+      name: body.name.trim(),
+      category: body.category?.trim() || 'General',
+      unit: body.unit?.trim() || 'Piece',
+      costPricePaisa: costPrice,
+      salePricePaisa: body.salePricePaisa,
+      lowStockMilli: Number(body.minimumStockMilli ?? 0),
+      isActive: true,
+      isDeleted: false,
+      syncVersion: 1,
+      createdAt: nowIso,
+      updatedAt: nowIso,
     })
 
-    realtime?.broadcastToShop(session.shopUuid, {
+    await store.col(CLOUD_COLLECTIONS.stockLevels).insertOne({
+      _id: `${shopUuid}:${session.branchId}:${id}` as any,
+      shopUuid,
+      branchId: session.branchId,
+      productId: id,
+      quantityMilli: openingQty,
+      syncVersion: 1,
+      updatedAt: nowIso,
+    })
+
+    if (openingQty > 0) {
+      const mvId = `stock-${randomUUID()}`
+      await store.col(CLOUD_COLLECTIONS.stockMovements).insertOne({
+        _id: `${shopUuid}:${mvId}` as any,
+        id: mvId,
+        shopUuid,
+        branchId: session.branchId,
+        productId: id,
+        movementType: 'opening_stock',
+        quantityDeltaMilli: openingQty,
+        referenceType: 'cloud_product',
+        referenceId: id,
+        originSource: 'cloud_owner',
+        counterId: 'cloud',
+        note: 'Remote opening stock',
+        occurredAt: nowIso,
+      })
+    }
+
+    const evt = await store.appendCloudOwnerEvent({
+      shopUuid,
+      eventId: `cevt-${randomUUID()}`,
+      entityType: 'product',
+      entityId: id,
+      operation: 'upsert',
+      payload: {
+        id,
+        businessId,
+        branchId: session.branchId,
+        sku,
+        barcode: body.barcode || null,
+        name: body.name.trim(),
+        category: body.category?.trim() || 'General',
+        unit: body.unit?.trim() || 'Piece',
+        costPricePaisa: costPrice,
+        salePricePaisa: body.salePricePaisa,
+        minimumStockMilli: Number(body.minimumStockMilli ?? 0),
+        openingStockMilli: openingQty,
+        isActive: true,
+        syncVersion: 1,
+      },
+    })
+
+    realtime?.broadcastToShop(shopUuid, {
       type: 'product:updated',
-      shopUuid: session.shopUuid,
+      shopUuid,
       payload: { productId: id, cloudSeq: evt.cloudSeq },
     })
     return { ok: true, id, sku, cloudSeq: evt.cloudSeq }
   })
 
-  // PUT /api/cloud/owner/products/:id — Update product prices / catalog remotely
+  // PUT /api/cloud/owner/products/:id
   app.put('/api/cloud/owner/products/:id', async (request, reply) => {
     const params = request.params as { id: string }
     const body = (request.body as {
@@ -750,69 +731,58 @@ export function registerRemoteOwnerRoutes(
       minimumStockMilli?: number
       isActive?: boolean
     }) || {}
-    const session = await enforceCloudOwner(request, reply, centralPool, 'products.manage', body.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'products.manage', body.shopUuid)
     if (!session) return
 
-    const outcome = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const { rows } = await client.query(
-        `UPDATE products SET
-          name = COALESCE($1, name),
-          sale_price_paisa = COALESCE($2, sale_price_paisa),
-          cost_price_paisa = COALESCE($3, cost_price_paisa),
-          low_stock_milli = COALESCE($4, low_stock_milli),
-          is_active = COALESCE($5, is_active),
-          sync_version = sync_version + 1,
-          updated_at = NOW()
-         WHERE id = $6
-         RETURNING *`,
-        [
-          body.name ?? null,
-          body.salePricePaisa ?? null,
-          body.costPricePaisa ?? null,
-          body.minimumStockMilli ?? null,
-          body.isActive ?? null,
-          params.id,
-        ],
-      )
-      if (!rows.length) {
-        return null
-      }
-      const updated = rows[0]
-      const evt = await appendCloudOwnerEvent(client, {
-        entityType: 'product',
-        entityId: params.id,
-        operation: 'upsert',
-        payload: {
-          id: updated.id,
-          businessId: updated.business_id,
-          branchId: session.branchId,
-          sku: updated.sku,
-          barcode: updated.barcode,
-          name: updated.name,
-          category: updated.category,
-          unit: updated.unit,
-          costPricePaisa: Number(updated.cost_price_paisa),
-          salePricePaisa: Number(updated.sale_price_paisa),
-          minimumStockMilli: Number(updated.low_stock_milli),
-          isActive: Boolean(updated.is_active),
-          syncVersion: Number(updated.sync_version),
-        },
-      })
-      return { updated, evt }
-    })
+    const shopUuid = session.shopUuid
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() }
+    if (body.name !== undefined) updates.name = body.name
+    if (body.salePricePaisa !== undefined) updates.salePricePaisa = body.salePricePaisa
+    if (body.costPricePaisa !== undefined) updates.costPricePaisa = body.costPricePaisa
+    if (body.minimumStockMilli !== undefined) updates.lowStockMilli = body.minimumStockMilli
+    if (body.isActive !== undefined) updates.isActive = body.isActive
 
-    if (!outcome) {
+    const updated = await store.col(CLOUD_COLLECTIONS.products).findOneAndUpdate(
+      { shopUuid, id: params.id, isDeleted: { $ne: true } },
+      { $set: updates, $inc: { syncVersion: 1 } },
+      { returnDocument: 'after' },
+    )
+    if (!updated) {
       return reply.status(404).send({ error: 'NotFound', message: 'Product not found.', statusCode: 404 })
     }
-    realtime?.broadcastToShop(session.shopUuid, {
-      type: 'product:updated',
-      shopUuid: session.shopUuid,
-      payload: { productId: params.id, cloudSeq: outcome.evt.cloudSeq },
+
+    const evt = await store.appendCloudOwnerEvent({
+      shopUuid,
+      eventId: `cevt-${randomUUID()}`,
+      entityType: 'product',
+      entityId: params.id,
+      operation: 'upsert',
+      payload: {
+        id: String(updated.id),
+        businessId: String(updated.businessId),
+        branchId: session.branchId,
+        sku: String(updated.sku),
+        barcode: updated.barcode ? String(updated.barcode) : null,
+        name: String(updated.name),
+        category: String(updated.category),
+        unit: String(updated.unit),
+        costPricePaisa: Number(updated.costPricePaisa),
+        salePricePaisa: Number(updated.salePricePaisa),
+        minimumStockMilli: Number(updated.lowStockMilli),
+        isActive: Boolean(updated.isActive),
+        syncVersion: Number(updated.syncVersion),
+      },
     })
-    return { ok: true, product: outcome.updated, cloudSeq: outcome.evt.cloudSeq }
+
+    realtime?.broadcastToShop(shopUuid, {
+      type: 'product:updated',
+      shopUuid,
+      payload: { productId: params.id, cloudSeq: evt.cloudSeq },
+    })
+    return { ok: true, product: updated, cloudSeq: evt.cloudSeq }
   })
 
-  // POST /api/cloud/owner/inventory/adjust — Remote movement-ledger adjustment (delta-only!)
+  // POST /api/cloud/owner/inventory/adjust
   app.post('/api/cloud/owner/inventory/adjust', async (request, reply) => {
     const body = (request.body as {
       shopUuid?: string
@@ -820,148 +790,237 @@ export function registerRemoteOwnerRoutes(
       quantityDeltaMilli?: number
       reason?: string
     }) || {}
-    const session = await enforceCloudOwner(request, reply, centralPool, 'stock.adjust', body.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'stock.adjust', body.shopUuid)
     if (!session) return
 
     if (!body.productId || !Number.isSafeInteger(body.quantityDeltaMilli) || body.quantityDeltaMilli === 0) {
       return reply.status(400).send({ error: 'BadRequest', message: 'productId and non-zero quantityDeltaMilli required.', statusCode: 400 })
     }
+    const deltaMilli = Number(body.quantityDeltaMilli)
 
+    const shopUuid = session.shopUuid
     const movementId = `stock-${randomUUID()}`
     const nowIso = new Date().toISOString()
 
-    const { nextQty, evt } = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const slRes = await client.query<{ quantity_milli: string }>(
-        'SELECT quantity_milli FROM stock_levels WHERE branch_id = $1 AND product_id = $2 FOR UPDATE',
-        [session.branchId, body.productId],
-      )
-      const currentQty = Number(slRes.rows[0]?.quantity_milli ?? 0)
-      const computedNext = Math.max(0, currentQty + body.quantityDeltaMilli!)
-      const mvType = body.quantityDeltaMilli! > 0 ? 'adjustment_increase' : 'adjustment_decrease'
+    const existing = await store.col(CLOUD_COLLECTIONS.stockLevels).findOne({
+      shopUuid,
+      branchId: session.branchId,
+      productId: body.productId,
+    })
+    const currentQty = Number(existing?.quantityMilli ?? 0)
+    const computedNext = Math.max(0, currentQty + deltaMilli)
+    const mvType = deltaMilli > 0 ? 'adjustment_increase' : 'adjustment_decrease'
 
-      await client.query(
-        `INSERT INTO stock_movements (id, branch_id, product_id, movement_type, quantity_delta_milli, reference_type, reference_id, origin_source, counter_id, note, occurred_at)
-         VALUES ($1,$2,$3,$4,$5,'cloud_adjustment',$6,'cloud_owner','cloud',$7,$8)`,
-        [movementId, session.branchId, body.productId, mvType, body.quantityDeltaMilli, movementId, body.reason || 'Remote owner stock adjustment', nowIso],
-      )
-      await client.query(
-        `INSERT INTO stock_levels (branch_id, product_id, quantity_milli, sync_version, updated_at)
-         VALUES ($1,$2,$3,1,$4)
-         ON CONFLICT (branch_id, product_id) DO UPDATE SET
-           quantity_milli = $3, sync_version = stock_levels.sync_version + 1, updated_at = $4`,
-        [session.branchId, body.productId, computedNext, nowIso],
-      )
+    await store.col(CLOUD_COLLECTIONS.stockMovements).insertOne({
+      _id: `${shopUuid}:${movementId}` as any,
+      id: movementId,
+      shopUuid,
+      branchId: session.branchId,
+      productId: body.productId,
+      movementType: mvType,
+      quantityDeltaMilli: body.quantityDeltaMilli,
+      referenceType: 'cloud_adjustment',
+      referenceId: movementId,
+      originSource: 'cloud_owner',
+      counterId: 'cloud',
+      note: body.reason || 'Remote owner stock adjustment',
+      occurredAt: nowIso,
+    })
 
-      const appended = await appendCloudOwnerEvent(client, {
-        entityType: 'stock_movement',
-        entityId: movementId,
-        operation: 'adjust',
-        payload: {
-          id: movementId,
+    await store.col(CLOUD_COLLECTIONS.stockLevels).updateOne(
+      { shopUuid, branchId: session.branchId, productId: body.productId },
+      {
+        $set: { quantityMilli: computedNext, updatedAt: nowIso },
+        $inc: { syncVersion: 1 },
+        $setOnInsert: {
+          _id: `${shopUuid}:${session.branchId}:${body.productId}` as any,
+          shopUuid,
           branchId: session.branchId,
           productId: body.productId,
-          movementType: mvType,
-          quantityDeltaMilli: body.quantityDeltaMilli,
-          note: body.reason || 'Remote owner stock adjustment',
         },
-      })
-      return { nextQty: computedNext, evt: appended }
+      },
+      { upsert: true },
+    )
+
+    const evt = await store.appendCloudOwnerEvent({
+      shopUuid,
+      eventId: `cevt-${randomUUID()}`,
+      entityType: 'stock_movement',
+      entityId: movementId,
+      operation: 'adjust',
+      payload: {
+        id: movementId,
+        branchId: session.branchId,
+        productId: body.productId,
+        movementType: mvType,
+        quantityDeltaMilli: body.quantityDeltaMilli,
+        note: body.reason || 'Remote owner stock adjustment',
+      },
     })
 
-    realtime?.broadcastToShop(session.shopUuid, {
+    realtime?.broadcastToShop(shopUuid, {
       type: 'inventory:changed',
-      shopUuid: session.shopUuid,
-      payload: { productId: body.productId, quantityMilli: nextQty, cloudSeq: evt.cloudSeq },
+      shopUuid,
+      payload: { productId: body.productId, quantityMilli: computedNext, cloudSeq: evt.cloudSeq },
     })
-    return { ok: true, movementId, balanceAfterMilli: nextQty, cloudSeq: evt.cloudSeq }
+    return { ok: true, movementId, balanceAfterMilli: computedNext, cloudSeq: evt.cloudSeq }
   })
 
-  // GET /api/cloud/owner/customers & /suppliers & /expenses & /staff & /counters & /conflicts
+  // GET /api/cloud/owner/customers
   app.get('/api/cloud/owner/customers', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'customers.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'customers.read', q.shopUuid)
     if (!session) return
-    const { rows } = await tenantManager.queryTenant(
-      session.shopUuid,
-      `SELECT c.*, COALESCE((SELECT SUM(debit_paisa - credit_paisa) FROM customer_ledger cl WHERE cl.customer_id = c.id), 0) AS balance_paisa
-       FROM customers c WHERE c.is_walk_in = FALSE ORDER BY c.name ASC`,
-    )
-    return { customers: rows.map(r => ({ ...r, balance_paisa: Number(r.balance_paisa) })) }
+
+    const [customers, ledger] = await Promise.all([
+      store.col(CLOUD_COLLECTIONS.customers).find({ shopUuid: session.shopUuid, isWalkIn: { $ne: true }, isDeleted: { $ne: true } }).sort({ name: 1 }).toArray(),
+      store.col(CLOUD_COLLECTIONS.customerLedger).find({ shopUuid: session.shopUuid }).toArray(),
+    ])
+    const balances = new Map<string, number>()
+    for (const row of ledger) {
+      const cid = String(row.customerId)
+      balances.set(cid, (balances.get(cid) ?? 0) + Number(row.debitPaisa ?? 0) - Number(row.creditPaisa ?? 0))
+    }
+
+    return {
+      customers: customers.map(c => ({
+        id: String(c.id),
+        name: String(c.name),
+        phone: String(c.phone || ''),
+        is_active: c.isActive !== false,
+        balance_paisa: balances.get(String(c.id)) ?? 0,
+        updated_at: String(c.updatedAt || c.createdAt || ''),
+      })),
+    }
   })
 
+  // GET /api/cloud/owner/suppliers
   app.get('/api/cloud/owner/suppliers', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'retail.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'retail.read', q.shopUuid)
     if (!session) return
-    const { rows } = await tenantManager.queryTenant(
-      session.shopUuid,
-      `SELECT s.*, COALESCE((SELECT SUM(debit_paisa - credit_paisa) FROM supplier_ledger sl WHERE sl.supplier_id = s.id), 0) AS balance_paisa
-       FROM suppliers s ORDER BY s.name ASC`,
-    )
-    return { suppliers: rows.map(r => ({ ...r, balance_paisa: Number(r.balance_paisa) })) }
+
+    const [suppliers, ledger] = await Promise.all([
+      store.col(CLOUD_COLLECTIONS.suppliers).find({ shopUuid: session.shopUuid, isDeleted: { $ne: true } }).sort({ name: 1 }).toArray(),
+      store.col(CLOUD_COLLECTIONS.supplierLedger).find({ shopUuid: session.shopUuid }).toArray(),
+    ])
+    const balances = new Map<string, number>()
+    for (const row of ledger) {
+      const sid = String(row.supplierId)
+      balances.set(sid, (balances.get(sid) ?? 0) + Number(row.debitPaisa ?? 0) - Number(row.creditPaisa ?? 0))
+    }
+
+    return {
+      suppliers: suppliers.map(s => ({
+        id: String(s.id),
+        name: String(s.name),
+        phone: String(s.phone || ''),
+        is_active: s.isActive !== false,
+        balance_paisa: balances.get(String(s.id)) ?? 0,
+        updated_at: String(s.updatedAt || s.createdAt || ''),
+      })),
+    }
   })
 
+  // GET /api/cloud/owner/expenses
   app.get('/api/cloud/owner/expenses', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'expenses.read', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'expenses.read', q.shopUuid)
     if (!session) return
-    const { rows } = await tenantManager.queryTenant(session.shopUuid, 'SELECT * FROM expenses ORDER BY occurred_at DESC LIMIT 200')
-    return { expenses: rows.map(r => ({ ...r, amount_paisa: Number(r.amount_paisa) })) }
+
+    const docs = await store.col(CLOUD_COLLECTIONS.expenses).find({ shopUuid: session.shopUuid }).sort({ occurredAt: -1 }).limit(200).toArray()
+    return {
+      expenses: docs.map(e => ({
+        id: String(e.id),
+        expense_number: String(e.expenseNumber),
+        business_date: String(e.businessDate),
+        category: String(e.category),
+        description: String(e.description || ''),
+        method: String(e.method),
+        amount_paisa: Number(e.amountPaisa ?? 0),
+        note: String(e.note || ''),
+        occurred_at: String(e.occurredAt),
+      })),
+    }
   })
 
+  // GET /api/cloud/owner/counters
   app.get('/api/cloud/owner/counters', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'users.manage', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'users.manage', q.shopUuid)
     if (!session) return
-    const { rows } = await tenantManager.queryTenant(session.shopUuid, 'SELECT * FROM counters ORDER BY counter_number ASC')
-    return { counters: rows }
+
+    const docs = await store.col(CLOUD_COLLECTIONS.counters).find({ shopUuid: session.shopUuid }).sort({ counterNumber: 1 }).toArray()
+    return {
+      counters: docs.map(c => ({
+        id: String(c.id),
+        counter_number: Number(c.counterNumber),
+        name: String(c.name),
+        status: String(c.status),
+        is_primary: Boolean(c.isPrimary),
+        app_version: c.appVersion ? String(c.appVersion) : null,
+        last_ip: c.lastIp ? String(c.lastIp) : null,
+        last_seen_at: c.lastSeenAt ? String(c.lastSeenAt) : null,
+        revoked_at: c.revokedAt ? String(c.revokedAt) : null,
+      })),
+    }
   })
 
+  // POST /api/cloud/owner/counters/:id/revoke
   app.post('/api/cloud/owner/counters/:id/revoke', async (request, reply) => {
     const params = request.params as { id: string }
     const body = (request.body as { shopUuid?: string }) || {}
-    const session = await enforceCloudOwner(request, reply, centralPool, 'users.manage', body.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'users.manage', body.shopUuid)
     if (!session) return
 
-    const outcome = await tenantManager.withTenantTransaction(session.shopUuid, async client => {
-      const res = await client.query(
-        `UPDATE counters SET status = 'revoked', revoked_at = NOW() WHERE id = $1 AND is_primary = FALSE RETURNING *`,
-        [params.id],
-      )
-      if (!res.rowCount) {
-        return null
-      }
-      await centralPool.query(
-        `UPDATE vtx_central.counter_devices SET status = 'revoked', revoked_at = NOW() WHERE shop_uuid = $1 AND id = $2`,
-        [session.shopUuid, params.id],
-      )
-      const evt = await appendCloudOwnerEvent(client, {
-        entityType: 'counter',
-        entityId: params.id,
-        operation: 'revoke',
-        payload: { id: params.id, status: 'revoked' },
-      })
-      return { counter: res.rows[0], cloudSeq: evt.cloudSeq }
-    })
-
-    if (!outcome) {
+    const nowIso = new Date().toISOString()
+    const counter = await store.col(CLOUD_COLLECTIONS.counters).findOneAndUpdate(
+      { shopUuid: session.shopUuid, id: params.id, isPrimary: false },
+      { $set: { status: 'revoked', revokedAt: nowIso } },
+      { returnDocument: 'after' },
+    )
+    if (!counter) {
       return reply.status(400).send({ error: 'CannotRevoke', message: 'Counter not found or is primary Counter 1.', statusCode: 400 })
     }
-    return { ok: true, counter: outcome.counter, cloudSeq: outcome.cloudSeq }
+
+    const evt = await store.appendCloudOwnerEvent({
+      shopUuid: session.shopUuid,
+      eventId: `cevt-${randomUUID()}`,
+      entityType: 'counter',
+      entityId: params.id,
+      operation: 'revoke',
+      payload: { id: params.id, status: 'revoked' },
+    })
+    return { ok: true, counter, cloudSeq: evt.cloudSeq }
   })
 
+  // GET /api/cloud/owner/conflicts
   app.get('/api/cloud/owner/conflicts', async (request, reply) => {
     const q = request.query as { shopUuid?: string }
-    const session = await enforceCloudOwner(request, reply, centralPool, 'settings.manage', q.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'settings.manage', q.shopUuid)
     if (!session) return
-    const { rows } = await tenantManager.queryTenant(session.shopUuid, 'SELECT * FROM sync_conflicts ORDER BY resolved_at DESC LIMIT 100')
-    return { conflicts: rows }
+
+    const docs = await store.col(CLOUD_COLLECTIONS.syncConflicts).find({ shopUuid: session.shopUuid }).sort({ resolvedAt: -1 }).limit(100).toArray()
+    return {
+      conflicts: docs.map(c => ({
+        id: String(c.id),
+        entity_type: String(c.entityType),
+        entity_id: String(c.entityId),
+        counter_id: String(c.counterId || 'counter-1'),
+        cloud_seq: c.cloudSeq !== null && c.cloudSeq !== undefined ? Number(c.cloudSeq) : null,
+        conflict_type: String(c.conflictType),
+        local_summary: String(c.localSummary || ''),
+        cloud_summary: String(c.cloudSummary || ''),
+        resolution: String(c.resolution || ''),
+        resolved_at: String(c.resolvedAt || ''),
+      })),
+    }
   })
 
   // Main PC physical hardware actions unavailable remotely
   const hardwareRequired = async (request: any, reply: any) => {
     const body = (request.body as { shopUuid?: string }) || {}
-    const session = await enforceCloudOwner(request, reply, centralPool, 'pos.sell', body.shopUuid)
+    const session = await enforceCloudOwner(request, reply, store, 'pos.sell', body.shopUuid)
     if (!session) return
     return reply.status(409).send({
       error: 'MAIN_PC_HARDWARE_REQUIRED',

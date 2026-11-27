@@ -9,7 +9,7 @@ export function LoginScreen({
   onAuthenticated: (session: CloudOwnerSession) => void
   sessionNotice?: string | null
 }) {
-  const [gatewayUrl, setGatewayUrl] = useState(() => getSavedCloudUrl() || 'https://retail-pos-production-c8813513.up.railway.app')
+  const [gatewayUrl, setGatewayUrl] = useState(() => getSavedCloudUrl() || '')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [shopUuid, setShopUuid] = useState('')
@@ -45,7 +45,7 @@ export function LoginScreen({
     e.preventDefault()
     setError(null)
     if (!gatewayUrl.trim()) {
-      setError('Enter your Railway Cloud Gateway URL.')
+      setError('Enter your Vertexia Cloud API URL.')
       return
     }
     if (!username.trim() || !password) {
@@ -131,7 +131,7 @@ export function LoginScreen({
                 type="url"
                 value={gatewayUrl}
                 onChange={e => setGatewayUrl(e.target.value)}
-                placeholder="https://your-gateway.up.railway.app"
+                placeholder="https://your-cloud-api.onrender.com"
                 className="w-full rounded-xl border border-[#dce6f4] bg-[#f8fbff] px-3.5 py-2.5 text-sm text-[#10243f] outline-none focus:border-[#6d4aff] focus:ring-2 focus:ring-[#6d4aff]/20"
                 required
               />
@@ -208,7 +208,7 @@ export function LoginScreen({
         </form>
 
         <p className="mt-5 text-center text-[11px] leading-relaxed text-[#55667d]">
-          Works independently of Main PC power status using encrypted Railway + Supabase synced data. Passwords are never saved on this device.
+          Works independently of Main PC power status using MongoDB Atlas synced data. Passwords are never saved on this device.
         </p>
       </div>
     </div>

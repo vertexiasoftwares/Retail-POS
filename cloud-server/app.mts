@@ -1,8 +1,6 @@
 import fastify, { type FastifyInstance } from 'fastify'
-import type { Pool } from 'pg'
 import { loadCloudEnv, type CloudEnvConfig } from './config/env.mjs'
-import { createCentralPool, runCentralMigrations } from './db/central-pool.mjs'
-import { TenantDatabaseManager } from './db/tenant-manager.mjs'
+import { connectMongoCloudStore, type MongoCloudStore } from './db/mongo-store.mjs'
 import { CloudRealtimeBroker } from './realtime.mjs'
 import { registerCloudAuthRoutes } from './routes/auth.mjs'
 import { registerCloudSyncRoutes } from './routes/sync.mjs'
@@ -11,16 +9,14 @@ import { registerCloudBackupRoutes } from './routes/backup.mjs'
 
 export interface CloudAppOptions {
   config?: CloudEnvConfig
-  centralPool?: Pool
-  runMigrations?: boolean
+  store?: MongoCloudStore
   logger?: boolean
 }
 
 export interface CloudAppInstance {
   app: FastifyInstance
   config: CloudEnvConfig
-  centralPool: Pool
-  tenantManager: TenantDatabaseManager
+  store: MongoCloudStore
   realtime: CloudRealtimeBroker
   start: () => Promise<string>
   stop: () => Promise<void>
@@ -28,15 +24,9 @@ export interface CloudAppInstance {
 
 export async function createCloudServer(options: CloudAppOptions = {}): Promise<CloudAppInstance> {
   const config = options.config ?? loadCloudEnv()
-  const ownsPool = !options.centralPool
-  const centralPool = options.centralPool ?? createCentralPool(config)
-
-  if (options.runMigrations !== false) {
-    await runCentralMigrations(centralPool)
-  }
-
-  const tenantManager = new TenantDatabaseManager(config, centralPool)
-  const realtime = new CloudRealtimeBroker(centralPool)
+  const ownsStore = !options.store
+  const store = options.store ?? (await connectMongoCloudStore(config))
+  const realtime = new CloudRealtimeBroker(store)
 
   const loggerOption =
     options.logger === false || config.nodeEnv === 'test'
@@ -129,10 +119,11 @@ export async function createCloudServer(options: CloudAppOptions = {}): Promise<
   })
 
   app.get('/api/cloud/health', async () => {
-    await centralPool.query('SELECT 1')
+    await store.ping()
     return {
       status: 'ok',
       service: 'vertexia-cloud-gateway',
+      database: 'mongodb',
       timestamp: new Date().toISOString(),
     }
   })
@@ -141,10 +132,10 @@ export async function createCloudServer(options: CloudAppOptions = {}): Promise<
     void realtime.handleUpgrade(req, socket as any)
   })
 
-  registerCloudAuthRoutes(app, centralPool, tenantManager)
-  registerCloudSyncRoutes(app, config, centralPool, tenantManager, realtime)
-  registerRemoteOwnerRoutes(app, centralPool, tenantManager, realtime)
-  registerCloudBackupRoutes(app, config, centralPool, tenantManager)
+  registerCloudAuthRoutes(app, store)
+  registerCloudSyncRoutes(app, config, store, realtime)
+  registerRemoteOwnerRoutes(app, store, realtime)
+  registerCloudBackupRoutes(app, store)
 
   let running = false
   const start = async (): Promise<string> => {
@@ -164,17 +155,15 @@ export async function createCloudServer(options: CloudAppOptions = {}): Promise<
     running = false
     realtime.closeAll()
     await app.close().catch(() => undefined)
-    await tenantManager.closeAll()
-    if (ownsPool) {
-      await centralPool.end().catch(() => undefined)
+    if (ownsStore) {
+      await store.close()
     }
   }
 
   return {
     app,
     config,
-    centralPool,
-    tenantManager,
+    store,
     realtime,
     start,
     stop,

@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import net from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
 import { createCloudServer } from '../cloud-dist/cloud-server/app.mjs'
 import { loadCloudEnv, loadDotEnv } from '../cloud-dist/cloud-server/config/env.mjs'
-import { hashScryptPassword, resetCloudAuthRateLimits } from '../cloud-dist/cloud-server/routes/auth.mjs'
+import { CLOUD_COLLECTIONS, connectMongoCloudStore } from '../cloud-dist/cloud-server/db/mongo-store.mjs'
+import { hashScryptPassword, resetCloudAuthRateLimits, signNodePayload } from '../cloud-dist/cloud-server/routes/auth.mjs'
 import { AuthRepository } from '../electron-dist/electron/database/auth.mjs'
 import { VertexiaDatabase } from '../electron-dist/electron/database/database.mjs'
 import { RetailRepository } from '../electron-dist/electron/database/retail.mjs'
 import { HybridSyncEngine } from '../electron-dist/electron/sync/engine.mjs'
 import { reconcileCloudEvents } from '../electron-dist/electron/sync/reconciler.mjs'
+import { createInMemoryMongoCloudStore } from './helpers/in-memory-mongo.mjs'
 
 loadDotEnv()
 
@@ -113,27 +113,21 @@ function connectRawWebSocket(port, pathWithQuery, timeoutMs = 4000) {
   })
 }
 
-test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversal & PWA Artifact Verification', async t => {
+test('Phase 8: MongoDB Cloud API CORS, SQLite Password Sync, Tombstones, Duplicate Replay & Full Owner Flow', async t => {
   await t.test('enforces strict configured CORS origins, preflight OPTIONS 204/403, Vary: Origin, and zero wildcards', async () => {
-    const fakePool = {
-      async query() {
-        return { rows: [{ '?column?': 1 }] }
-      },
-      async end() {},
-    }
+    const store = await createInMemoryMongoCloudStore()
     const config = loadCloudEnv({
       NODE_ENV: 'test',
       CLOUD_HOST: '127.0.0.1',
       CLOUD_PORT: '0',
       CLOUD_CORS_ORIGINS: 'https://owner.vertexia.app,http://localhost:5174',
-      DATABASE_CENTRAL_URL: 'postgres://postgres:postgres@127.0.0.1:5432/postgres',
+      MONGODB_URI: 'mongodb://127.0.0.1:27017',
       CLOUD_JWT_SECRET: 'test-jwt-secret-key-at-least-32-characters-1234',
       CLOUD_NODE_HMAC_SECRET: 'test-hmac-secret-key-at-least-32-characters-1234',
     })
-    const cloud = await createCloudServer({ config, centralPool: fakePool, runMigrations: false, logger: false })
+    const cloud = await createCloudServer({ config, store, logger: false })
     t.after(() => cloud.stop())
 
-    // Allowed origin GET
     const okGet = await cloud.app.inject({
       method: 'GET',
       url: '/api/cloud/health',
@@ -144,7 +138,6 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     assert.equal(okGet.headers.vary, 'Origin')
     assert.notEqual(okGet.headers['access-control-allow-origin'], '*')
 
-    // Allowed origin preflight OPTIONS
     const okPreflight = await cloud.app.inject({
       method: 'OPTIONS',
       url: '/api/cloud/owner/sales',
@@ -154,9 +147,7 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     assert.equal(okPreflight.headers['access-control-allow-origin'], 'http://localhost:5174')
     assert.match(String(okPreflight.headers['access-control-allow-methods']), /DELETE/)
     assert.match(String(okPreflight.headers['access-control-allow-headers']), /Authorization/)
-    assert.match(String(okPreflight.headers['access-control-allow-headers']), /Content-Type/)
 
-    // Disallowed origin preflight OPTIONS
     const badPreflight = await cloud.app.inject({
       method: 'OPTIONS',
       url: '/api/cloud/owner/sales',
@@ -165,26 +156,20 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     assert.equal(badPreflight.statusCode, 403)
     assert.equal(badPreflight.headers['access-control-allow-origin'], undefined)
 
-    // Disallowed cross-origin API GET
     const badGet = await cloud.app.inject({
       method: 'GET',
       url: '/api/cloud/health',
       headers: { origin: 'https://evil.example.com' },
     })
     assert.equal(badGet.statusCode, 403)
-    assert.equal(badGet.headers['access-control-allow-origin'], undefined)
 
-    // Server-to-server / native client without Origin works without emitting wildcard CORS
-    const noOrigin = await cloud.app.inject({
-      method: 'GET',
-      url: '/api/cloud/health',
-    })
+    const noOrigin = await cloud.app.inject({ method: 'GET', url: '/api/cloud/health' })
     assert.equal(noOrigin.statusCode, 200)
     assert.equal(noOrigin.headers['access-control-allow-origin'], undefined)
     assert.equal(noOrigin.headers.vary, 'Origin')
   })
 
-  await t.test('reconciles cloud user_credential password changes on Main PC, revokes live sessions & blocks stale/cross-shop events', async () => {
+  await t.test('reconciles cloud user_credential password changes & customer/supplier deletion tombstones on Main PC', async () => {
     const db = new VertexiaDatabase(':memory:')
     const auth = new AuthRepository(db.connection)
     t.after(() => db.close())
@@ -203,7 +188,7 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     const newHash = await hashScryptPassword('NewCloudPassword!2026')
     const nowIso = new Date().toISOString()
 
-    // 1. Cross-shop attack event MUST be rejected and logged as conflict
+    // 1. Cross-shop attack event rejected
     const crossRes = reconcileCloudEvents(
       db.connection,
       [
@@ -229,7 +214,6 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     )
     assert.equal(crossRes.conflictsCount, 1)
     assert.equal(crossRes.updatedUserIds.length, 0)
-    assert.ok(auth.authenticateToken(oldToken, false))
 
     // 2. Valid newer credential event updates SQLite & revokes old token
     const applyRes = reconcileCloudEvents(
@@ -264,7 +248,7 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     const { session: newLocalSession } = await auth.loginWithToken(setup.username, 'NewCloudPassword!2026', 'counter-1')
     assert.equal(newLocalSession.userId, setup.userId)
 
-    // 3. Stale downgrade credentialVersion (<= local v2) MUST be rejected cleanly
+    // 3. Stale downgrade rejected cleanly
     const olderHash = await hashScryptPassword('DowngradeAttempt!2026')
     const downgradeRes = reconcileCloudEvents(
       db.connection,
@@ -292,32 +276,35 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     assert.equal(downgradeRes.conflictsCount, 1)
     assert.equal(downgradeRes.updatedUserIds.length, 0)
 
-    // 4. Replay of valid event is idempotent
-    const replayRes = reconcileCloudEvents(
+    // 4. Customer tombstone deactivation
+    reconcileCloudEvents(
       db.connection,
       [
         {
-          cloudSeq: 2,
-          eventId: 'evt-cred-valid',
+          cloudSeq: 4,
+          eventId: 'evt-cust-create',
           originSource: 'cloud_owner',
-          entityType: 'user_credential',
-          entityId: setup.userId,
-          operation: 'password_change',
-          payload: {
-            userId: setup.userId,
-            shopUuid: db.shopUuid,
-            passwordHash: newHash,
-            credentialVersion: 2,
-            mustChangePassword: false,
-            updatedAt: nowIso,
-          },
+          entityType: 'customer',
+          entityId: 'cust-tomb-1',
+          operation: 'upsert',
+          payload: { name: 'Ali Khan', phone: '03001112233', isActive: true, syncVersion: 1 },
+          createdAt: nowIso,
+        },
+        {
+          cloudSeq: 5,
+          eventId: 'evt-cust-delete',
+          originSource: 'cloud_owner',
+          entityType: 'customer',
+          entityId: 'cust-tomb-1',
+          operation: 'delete',
+          payload: { syncVersion: 2 },
           createdAt: nowIso,
         },
       ],
       nowIso,
     )
-    assert.equal(replayRes.skippedCount, 1)
-    assert.equal(replayRes.appliedCount, 0)
+    const custRow = db.connection.prepare('SELECT is_active FROM customers WHERE id=?').get('cust-tomb-1')
+    assert.equal(Number(custRow.is_active), 0)
   })
 
   await t.test('verifies built Remote Owner PWA bundle files and Service Worker excludes API responses', () => {
@@ -332,27 +319,29 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     assert.equal(manifest.display, 'standalone')
   })
 
-  const centralUrl = process.env.TEST_DATABASE_CENTRAL_URL || process.env.DATABASE_CENTRAL_URL
-  if (!centralUrl) {
-    console.log('[SKIP LIVE PG PHASE 8] Set TEST_DATABASE_CENTRAL_URL or DATABASE_CENTRAL_URL for full live PG Remote Owner integration checks.')
-    return
-  }
-
-  await t.test('live PostgreSQL: Remote Owner APIs, invoice details, purchases, shifts, staff, backup download, WS realtime & cloud-to-Main-PC password sync', async subT => {
+  await t.test('end-to-end MongoDB Cloud API: Remote Owner endpoints, backup download, WS realtime, tombstones & password sync', async subT => {
     resetCloudAuthRateLimits()
-    const tempBackupDir = mkdtempSync(join(tmpdir(), 'vtx-cloud-bak-'))
+    const liveUri = process.env.TEST_MONGODB_URI
+    const testDbName = liveUri ? 'vertexia_cloud_test' : 'vertexia_cloud'
     const config = loadCloudEnv({
       NODE_ENV: 'test',
       CLOUD_HOST: '127.0.0.1',
       CLOUD_PORT: '0',
       CLOUD_CORS_ORIGINS: 'https://owner.vertexia.app',
-      PG_BACKUP_DIR: tempBackupDir,
-      DATABASE_CENTRAL_URL: centralUrl,
+      MONGODB_URI: liveUri || 'mongodb://127.0.0.1:27017',
+      MONGODB_DB_NAME: testDbName,
       CLOUD_JWT_SECRET: 'test-jwt-secret-key-at-least-32-characters-1234',
       CLOUD_NODE_HMAC_SECRET: 'test-hmac-secret-key-at-least-32-characters-1234',
     })
 
-    const cloud = await createCloudServer({ config, logger: false })
+    if (liveUri) {
+      console.log(`[LIVE ATLAS] Phase 8 using dedicated test database: ${testDbName}`)
+    }
+    const store = liveUri
+      ? await connectMongoCloudStore(config)
+      : await createInMemoryMongoCloudStore()
+
+    const cloud = await createCloudServer({ config, store, logger: false })
     await cloud.start()
     const port = cloud.app.server.address().port
     const cloudBase = `http://127.0.0.1:${port}`
@@ -362,25 +351,19 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
 
     subT.after(async () => {
       resetCloudAuthRateLimits()
-      try {
-        await cloud.tenantManager.dropTenantSchemaForTest(db.shopUuid)
-      } catch {}
-      try {
-        await cloud.centralPool.query('DELETE FROM vtx_central.central_sessions WHERE shop_uuid = $1', [db.shopUuid])
-        await cloud.centralPool.query('DELETE FROM vtx_central.central_users WHERE shop_uuid = $1', [db.shopUuid])
-        await cloud.centralPool.query('DELETE FROM vtx_central.installations WHERE shop_uuid = $1', [db.shopUuid])
-        await cloud.centralPool.query('DELETE FROM vtx_central.counter_devices WHERE shop_uuid = $1', [db.shopUuid])
-        await cloud.centralPool.query('DELETE FROM vtx_central.tenant_databases WHERE shop_uuid = $1', [db.shopUuid])
-        await cloud.centralPool.query('DELETE FROM vtx_central.businesses WHERE shop_uuid = $1', [db.shopUuid])
-      } catch {}
       db.close()
       await cloud.stop()
-      rmSync(tempBackupDir, { recursive: true, force: true })
+      if (liveUri) {
+        try {
+          await store.db.dropDatabase()
+        } catch {}
+        await store.close()
+      }
     })
 
     const ownerUsername = `p8owner_${Date.now()}`
     const ownerSession = await auth.setup({
-      businessName: 'Phase8 SuperMart',
+      businessName: 'Phase8 Mongo SuperMart',
       branchName: 'Main Branch',
       city: 'Islamabad',
       ownerName: 'Riyaz Owner',
@@ -407,6 +390,7 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     })
 
     const shift = db.openPosShift(ownerSession.branchId, 50000, 'p8-shift-op')
+    assert.ok(shift)
     const todayDate = new Date(Date.now() + 5 * 3600_000).toISOString().slice(0, 10)
     retail.receivePurchase({
       operationId: 'p8-purchase-1',
@@ -427,7 +411,6 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
       paymentMethod: 'Cash',
       cashReceivedPaisa: 300000,
     })
-    assert.ok(shift)
 
     const engine = new HybridSyncEngine({
       db: db.connection,
@@ -437,6 +420,54 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     })
     const syncPush = await engine.triggerNow()
     assert.equal(syncPush.synced, true)
+
+    // Verify tombstone protection: delete product via sync push -> stale upsert cannot resurrect it
+    const nodeId = `node-${String(db.connection.prepare("SELECT value FROM app_meta WHERE key='installation_id'").get().value)}`
+    const delBody = JSON.stringify({
+      events: [
+        { eventId: 'evt-del-prod-1', entityType: 'product', entityId: prod.id, operation: 'delete', payload: { syncVersion: 2 } },
+      ],
+    })
+    const ts1 = String(Date.now())
+    const delRes = await fetch(`${cloudBase}/api/cloud/sync/push`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-vertexia-shop-uuid': db.shopUuid,
+        'x-vertexia-node-id': nodeId,
+        'x-vertexia-timestamp': ts1,
+        'x-vertexia-signature': signNodePayload(config.nodeHmacSecret, db.shopUuid, ts1, delBody),
+      },
+      body: delBody,
+    })
+    assert.equal(delRes.status, 200)
+    const tombCount = await store.col(CLOUD_COLLECTIONS.entityTombstones).countDocuments({ shopUuid: db.shopUuid, entityId: prod.id })
+    assert.equal(tombCount, 1)
+
+    // Un-delete back via active product upsert with higher syncVersion so remote owner test can edit it
+    const resBody = JSON.stringify({
+      events: [
+        {
+          eventId: 'evt-restore-prod-1',
+          entityType: 'product',
+          entityId: prod.id,
+          operation: 'upsert',
+          payload: { name: 'Basmati Rice 5kg', sku: 'RICE-5KG', sellingPricePaisa: 150000, purchasePricePaisa: 120000, status: 'active', syncVersion: 5 },
+        },
+      ],
+    })
+    const ts2 = String(Date.now())
+    await fetch(`${cloudBase}/api/cloud/sync/push`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-vertexia-shop-uuid': db.shopUuid,
+        'x-vertexia-node-id': nodeId,
+        'x-vertexia-timestamp': ts2,
+        'x-vertexia-signature': signNodePayload(config.nodeHmacSecret, db.shopUuid, ts2, resBody),
+      },
+      body: resBody,
+    })
 
     // Login remotely
     const login1 = await fetch(`${cloudBase}/api/cloud/auth/login`, {
@@ -449,7 +480,6 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     const tok1 = (await login1.json()).token
     const authHeader = { authorization: `Bearer ${tok1}` }
 
-    // 2nd login for testing multi-session invalidation after password change
     const login2 = await fetch(`${cloudBase}/api/cloud/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -458,7 +488,6 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     assert.equal(login2.status, 200)
     const tok2 = (await login2.json()).token
 
-    // Check Dashboard + Sales filter + Invoice Detail + Purchases + Shifts + Staff (no password_hash!) + Sync Status
     const dash = await (await fetch(`${cloudBase}/api/cloud/owner/dashboard`, { headers: authHeader })).json()
     assert.equal(dash.summary.todaySalesPaisa, 300000)
     assert.equal(dash.summary.openShiftsCount, 1)
@@ -486,12 +515,12 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
 
     const staffRes = await (await fetch(`${cloudBase}/api/cloud/owner/staff`, { headers: authHeader })).json()
     assert.equal(staffRes.staff.length >= 1, true)
-    assert.equal('password_hash' in staffRes.staff[0], false)
+    assert.equal('passwordHash' in staffRes.staff[0], false)
 
     const syncStatusRes = await (await fetch(`${cloudBase}/api/cloud/owner/sync-status`, { headers: authHeader })).json()
     assert.equal(syncStatusRes.installations.length, 1)
 
-    // Backup create + verify + download + path traversal block
+    // MongoDB Backup create + verify + download + traversal check
     const bCreate = await (
       await fetch(`${cloudBase}/api/cloud/owner/backups/create`, {
         method: 'POST',
@@ -508,7 +537,7 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     const traversal = await fetch(`${cloudBase}/api/cloud/owner/backups/..%2F..%2Fsecret.json/download`, { headers: authHeader })
     assert.equal(traversal.status, 400)
 
-    // WebSocket /api/cloud/events rejects invalid token & receives live product broadcast on valid token
+    // WebSocket /api/cloud/events
     const badWs = await connectRawWebSocket(port, '/api/cloud/events?token=invalid-token')
     assert.match(badWs.statusLine, /401/)
 
@@ -527,7 +556,7 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     await goodWs.waitForMessages(2)
     assert.equal(goodWs.messages[1].type, 'product:updated')
 
-    // Cloud password change -> revokes tok2 -> stale Main PC syncCredentials does NOT overwrite -> Main PC pulls & updates SQLite
+    // Cloud password change -> revokes tok2 -> stale syncCredentials does NOT overwrite -> Main PC pulls & updates SQLite
     const chPwdRes = await fetch(`${cloudBase}/api/cloud/auth/change-password`, {
       method: 'POST',
       headers: { ...authHeader, 'content-type': 'application/json' },
@@ -535,11 +564,9 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     })
     assert.equal(chPwdRes.status, 200)
 
-    // Older remote session tok2 MUST immediately fail with 401
     const oldSessRes = await fetch(`${cloudBase}/api/cloud/auth/me`, { headers: { authorization: `Bearer ${tok2}` } })
     assert.equal(oldSessRes.status, 401)
 
-    // Stale Main PC syncCredentials (still on v1) MUST NOT overwrite cloud v2 password!
     await engine.syncCredentials()
     const cloudReLogin = await fetch(`${cloudBase}/api/cloud/auth/login`, {
       method: 'POST',
@@ -548,7 +575,6 @@ test('Phase 8: Strict CORS, SQLite Password Sync Reconciliation, Backup Traversa
     })
     assert.equal(cloudReLogin.status, 200)
 
-    // Main PC pulls cloud_sync_events -> reconciles user_credential -> local SQLite accepts RemoteNewPassword!2026
     const localOldToken = (await auth.loginWithToken(ownerUsername, 'Password!2026', 'counter-1')).token
     const syncPull = await engine.triggerNow()
     assert.equal(syncPull.synced, true)

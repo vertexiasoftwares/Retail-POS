@@ -301,53 +301,61 @@ export function reconcileCloudEvents(
         }
         updatedProductIds.add(productId)
       } else if (evt.entityType === 'customer') {
-        const existing = db.prepare('SELECT id FROM customers WHERE id=?').get(evt.entityId)
-        if (existing) {
-          db.prepare(
-            'UPDATE customers SET name=COALESCE(?,name), phone=COALESCE(?,phone), is_active=COALESCE(?,is_active) WHERE id=?',
-          ).run(
-            p.name ? String(p.name) : null,
-            p.phone !== undefined ? (p.phone ? String(p.phone) : null) : null,
-            p.isActive !== undefined ? (p.isActive ? 1 : 0) : null,
-            evt.entityId,
-          )
+        if (evt.operation === 'delete' || evt.operation === 'deactivate') {
+          db.prepare('UPDATE customers SET is_active=0 WHERE id=?').run(evt.entityId)
         } else {
-          db.prepare(
-            'INSERT INTO customers(id, business_id, name, phone, is_walk_in, is_active, created_at) VALUES (?,?,?,?,0,?,?)',
-          ).run(
-            evt.entityId,
-            businessId,
-            String(p.name || 'Customer'),
-            p.phone ? String(p.phone) : null,
-            p.isActive === false ? 0 : 1,
-            evt.createdAt,
-          )
+          const existing = db.prepare('SELECT id FROM customers WHERE id=?').get(evt.entityId)
+          if (existing) {
+            db.prepare(
+              'UPDATE customers SET name=COALESCE(?,name), phone=COALESCE(?,phone), is_active=COALESCE(?,is_active) WHERE id=?',
+            ).run(
+              p.name ? String(p.name) : null,
+              p.phone !== undefined ? (p.phone ? String(p.phone) : null) : null,
+              p.isActive !== undefined ? (p.isActive ? 1 : 0) : null,
+              evt.entityId,
+            )
+          } else {
+            db.prepare(
+              'INSERT INTO customers(id, business_id, name, phone, is_walk_in, is_active, created_at) VALUES (?,?,?,?,0,?,?)',
+            ).run(
+              evt.entityId,
+              businessId,
+              String(p.name || 'Customer'),
+              p.phone ? String(p.phone) : null,
+              p.isActive === false ? 0 : 1,
+              evt.createdAt,
+            )
+          }
         }
         db.prepare(
           "INSERT INTO entity_sync_state(entity_type,entity_id,sync_version,cloud_updated_at) VALUES ('customer',?,?,?) ON CONFLICT(entity_type,entity_id) DO UPDATE SET sync_version=MAX(sync_version,excluded.sync_version), cloud_updated_at=excluded.cloud_updated_at",
         ).run(evt.entityId, Number(p.syncVersion ?? 1), evt.createdAt)
       } else if (evt.entityType === 'supplier') {
-        const existing = db.prepare('SELECT id FROM suppliers WHERE id=?').get(evt.entityId)
-        if (existing) {
-          db.prepare(
-            'UPDATE suppliers SET name=COALESCE(?,name), phone=COALESCE(?,phone), is_active=COALESCE(?,is_active) WHERE id=?',
-          ).run(
-            p.name ? String(p.name) : null,
-            p.phone !== undefined ? (p.phone ? String(p.phone) : null) : null,
-            p.isActive !== undefined ? (p.isActive ? 1 : 0) : null,
-            evt.entityId,
-          )
+        if (evt.operation === 'delete' || evt.operation === 'deactivate') {
+          db.prepare('UPDATE suppliers SET is_active=0 WHERE id=?').run(evt.entityId)
         } else {
-          db.prepare(
-            'INSERT INTO suppliers(id, business_id, name, phone, is_active, created_at) VALUES (?,?,?,?,?,?)',
-          ).run(
-            evt.entityId,
-            businessId,
-            String(p.name || 'Supplier'),
-            p.phone ? String(p.phone) : null,
-            p.isActive === false ? 0 : 1,
-            evt.createdAt,
-          )
+          const existing = db.prepare('SELECT id FROM suppliers WHERE id=?').get(evt.entityId)
+          if (existing) {
+            db.prepare(
+              'UPDATE suppliers SET name=COALESCE(?,name), phone=COALESCE(?,phone), is_active=COALESCE(?,is_active) WHERE id=?',
+            ).run(
+              p.name ? String(p.name) : null,
+              p.phone !== undefined ? (p.phone ? String(p.phone) : null) : null,
+              p.isActive !== undefined ? (p.isActive ? 1 : 0) : null,
+              evt.entityId,
+            )
+          } else {
+            db.prepare(
+              'INSERT INTO suppliers(id, business_id, name, phone, is_active, created_at) VALUES (?,?,?,?,?,?)',
+            ).run(
+              evt.entityId,
+              businessId,
+              String(p.name || 'Supplier'),
+              p.phone ? String(p.phone) : null,
+              p.isActive === false ? 0 : 1,
+              evt.createdAt,
+            )
+          }
         }
         db.prepare(
           "INSERT INTO entity_sync_state(entity_type,entity_id,sync_version,cloud_updated_at) VALUES ('supplier',?,?,?) ON CONFLICT(entity_type,entity_id) DO UPDATE SET sync_version=MAX(sync_version,excluded.sync_version), cloud_updated_at=excluded.cloud_updated_at",

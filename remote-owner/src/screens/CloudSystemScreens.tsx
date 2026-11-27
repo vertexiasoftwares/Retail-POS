@@ -245,7 +245,7 @@ export function BackupsScreen({ refreshTick }: { refreshTick: number }) {
     <div>
       <PageHeader
         title="Cloud Tenant Backups"
-        subtitle="SHA-256 verified JSON archives of your isolated Supabase tenant schema"
+        subtitle="SHA-256 verified JSON archives stored in MongoDB Atlas"
         action={
           <button
             type="button"
@@ -259,7 +259,7 @@ export function BackupsScreen({ refreshTick }: { refreshTick: number }) {
       />
 
       <div className="mb-4 rounded-xl border border-[#dce6f4] bg-white px-4 py-3 text-xs text-[#55667d]">
-        <strong className="text-[#10243f]">Backup &amp; Restore Scope:</strong> Cloud backups store a verified snapshot of synced tenant tables on the Railway volume. Full SQLite point-in-time restore onto the Shop Main PC remains Main PC desktop-only for local fiscal safety.
+        <strong className="text-[#10243f]">Backup &amp; Restore Scope:</strong> Cloud backups store a verified snapshot of synced tenant collections inside MongoDB Atlas so backups persist across container restarts. Full SQLite point-in-time restore onto the Shop Main PC remains Main PC desktop-only for local fiscal safety.
       </div>
 
       {notice && (
