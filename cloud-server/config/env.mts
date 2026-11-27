@@ -67,10 +67,24 @@ export function inferPgSslMode(connectionString: string, explicitMode?: string):
   }
 }
 
+function parsePort(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  const num = Number(trimmed)
+  if (!Number.isInteger(num) || num < 0 || num > 65535) return undefined
+  return num
+}
+
 export function loadCloudEnv(env: NodeJS.ProcessEnv = process.env): CloudEnvConfig {
   const nodeEnv = env.NODE_ENV ?? 'development'
-  const host = env.CLOUD_HOST ?? '127.0.0.1'
-  const port = Number(env.CLOUD_PORT ?? 8090)
+  const isProduction = nodeEnv === 'production'
+  const isRailway = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_SERVICE_ID)
+  const host = env.CLOUD_HOST?.trim() || (isProduction || isRailway ? '0.0.0.0' : '127.0.0.1')
+  const port =
+    (isProduction || isRailway
+      ? parsePort(env.PORT) ?? parsePort(env.CLOUD_PORT)
+      : parsePort(env.CLOUD_PORT) ?? parsePort(env.PORT)) ?? 8090
   const corsOrigins = (env.CLOUD_CORS_ORIGINS ?? '')
     .split(',')
     .map(s => s.trim())
@@ -107,7 +121,7 @@ export function loadCloudEnv(env: NodeJS.ProcessEnv = process.env): CloudEnvConf
   return {
     nodeEnv,
     host,
-    port: Number.isFinite(port) && port > 0 ? port : 8090,
+    port,
     corsOrigins,
     tlsCertPath: env.CLOUD_TLS_CERT || undefined,
     tlsKeyPath: env.CLOUD_TLS_KEY || undefined,

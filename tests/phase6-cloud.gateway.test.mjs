@@ -25,8 +25,30 @@ test('Phase 6: Cloud environment, HMAC signing, tenant schema naming & live Supa
       CLOUD_JWT_SECRET: 'prod-jwt-secret-value-at-least-32-characters-long',
       CLOUD_NODE_HMAC_SECRET: 'prod-hmac-secret-value-at-least-32-characters-long',
     })
+    assert.equal(cfg.host, '0.0.0.0')
     assert.equal(cfg.port, 8090)
     assert.equal(cfg.sslMode, 'disable')
+
+    const railwayCfg = loadCloudEnv({
+      NODE_ENV: 'production',
+      RAILWAY_ENVIRONMENT: 'production',
+      PORT: '41234',
+      CLOUD_PORT: '8090',
+      DATABASE_CENTRAL_URL: 'postgres://postgres:secret@db.example.com:5432/postgres',
+      CLOUD_JWT_SECRET: 'prod-jwt-secret-value-at-least-32-characters-long',
+      CLOUD_NODE_HMAC_SECRET: 'prod-hmac-secret-value-at-least-32-characters-long',
+    })
+    assert.equal(railwayCfg.host, '0.0.0.0')
+    assert.equal(railwayCfg.port, 41234)
+
+    const localCfg = loadCloudEnv({
+      NODE_ENV: 'development',
+      CLOUD_HOST: '127.0.0.1',
+      CLOUD_PORT: '8095',
+      PORT: '3000',
+    })
+    assert.equal(localCfg.host, '127.0.0.1')
+    assert.equal(localCfg.port, 8095)
   })
 
   await t.test('generates deterministic HMAC-SHA256 node signatures and deterministic immutable tenant schema names', () => {
